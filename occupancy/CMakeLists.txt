@@ -1,0 +1,5 @@
+add_executable(warp_schedule_demo warp_scheduler.cu)
+target_compile_options(warp_schedule_demo PRIVATE -lineinfo)
+set_property(TARGET warp_schedule_demo PROPERTY CUDA_ARCHITECTURES 80)
+target_compile_options(warp_schedule_demo PRIVATE "--expt-relaxed-constexpr")
+target_compile_options(warp_schedule_demo PRIVATE "--extended-lambda")

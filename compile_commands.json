@@ -1,0 +1,104 @@
+[
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -isystem /usr/local/cuda/targets/x86_64-linux/include -g -std=c++17 \"--generate-code=arch=compute_52,code=[compute_52,sm_52]\" -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/demo.cu -o CMakeFiles/demo.dir/demo.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/demo.cu",
+  "output": "CMakeFiles/demo.dir/demo.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -isystem /usr/local/cuda/targets/x86_64-linux/include -g -std=c++17 \"--generate-code=arch=compute_52,code=[compute_52,sm_52]\" --expt-relaxed-constexpr -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/element_wise/element_wise.cu -o element_wise/CMakeFiles/element_wise_demo.dir/element_wise.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/element_wise/element_wise.cu",
+  "output": "element_wise/CMakeFiles/element_wise_demo.dir/element_wise.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" --expt-relaxed-constexpr --extended-lambda -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/reduce_demo/reduce_0.cu -o reduce_demo/CMakeFiles/reduce_0.dir/reduce_0.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/reduce_demo/reduce_0.cu",
+  "output": "reduce_demo/CMakeFiles/reduce_0.dir/reduce_0.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" -lineinfo -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/coalesced_demo/coalesced_demo.cu -o coalesced_demo/CMakeFiles/coalesced_demo.dir/coalesced_demo.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/coalesced_demo/coalesced_demo.cu",
+  "output": "coalesced_demo/CMakeFiles/coalesced_demo.dir/coalesced_demo.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -isystem /usr/local/cuda/targets/x86_64-linux/include -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" -lineinfo -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/coalesced_demo/coalesced_practice.cu -o coalesced_demo/CMakeFiles/coalesced_practice.dir/coalesced_practice.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/coalesced_demo/coalesced_practice.cu",
+  "output": "coalesced_demo/CMakeFiles/coalesced_practice.dir/coalesced_practice.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -isystem /usr/local/cuda/targets/x86_64-linux/include -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/matmul_demo/matmul_main.cu -o matmul_demo/CMakeFiles/matmul.dir/matmul_main.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/matmul_demo/matmul_main.cu",
+  "output": "matmul_demo/CMakeFiles/matmul.dir/matmul_main.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -isystem /usr/local/cuda/targets/x86_64-linux/include -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/mat_transpose_demo/mat_transpose_main.cu -o mat_transpose_demo/CMakeFiles/mat_transpose.dir/mat_transpose_main.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/mat_transpose_demo/mat_transpose_main.cu",
+  "output": "mat_transpose_demo/CMakeFiles/mat_transpose.dir/mat_transpose_main.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/convolution_demo/one_dim/one_dim_main.cu -o convolution_demo/CMakeFiles/onn_dim_conv.dir/one_dim/one_dim_main.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/convolution_demo/one_dim/one_dim_main.cu",
+  "output": "convolution_demo/CMakeFiles/onn_dim_conv.dir/one_dim/one_dim_main.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/convolution_demo/two_dim/two_dim_main.cu -o convolution_demo/CMakeFiles/two_dim_conv.dir/two_dim/two_dim_main.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/convolution_demo/two_dim/two_dim_main.cu",
+  "output": "convolution_demo/CMakeFiles/two_dim_conv.dir/two_dim/two_dim_main.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" --expt-relaxed-constexpr --extended-lambda -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/scan_demo/scan_main.cu -o scan_demo/CMakeFiles/scan_demo.dir/scan_main.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/scan_demo/scan_main.cu",
+  "output": "scan_demo/CMakeFiles/scan_demo.dir/scan_main.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" --expt-relaxed-constexpr --extended-lambda -x cu -rdc=true -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/sort_demo/sort_main.cu -o sort_demo/CMakeFiles/sort_demo.dir/sort_main.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/sort_demo/sort_main.cu",
+  "output": "sort_demo/CMakeFiles/sort_demo.dir/sort_main.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" --expt-relaxed-constexpr --extended-lambda -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/compact_demo/compact_main.cu -o compact_demo/CMakeFiles/compact_demo.dir/compact_main.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/compact_demo/compact_main.cu",
+  "output": "compact_demo/CMakeFiles/compact_demo.dir/compact_main.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/storage_demo/storage_time.cu -o storage_demo/CMakeFiles/storage_time.dir/storage_time.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/storage_demo/storage_time.cu",
+  "output": "storage_demo/CMakeFiles/storage_time.dir/storage_time.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/storage_demo/texture_demo.cu -o storage_demo/CMakeFiles/texture_demo.dir/texture_demo.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/storage_demo/texture_demo.cu",
+  "output": "storage_demo/CMakeFiles/texture_demo.dir/texture_demo.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" -lineinfo --expt-relaxed-constexpr --extended-lambda -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/occupancy/warp_scheduler.cu -o occupancy/CMakeFiles/warp_schedule_demo.dir/warp_scheduler.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/occupancy/warp_scheduler.cu",
+  "output": "occupancy/CMakeFiles/warp_schedule_demo.dir/warp_scheduler.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -g -std=c++17 \"--generate-code=arch=compute_52,code=[compute_52,sm_52]\" -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/shared_mem/bank_conflict.cu -o shared_mem/CMakeFiles/bank_conflict_demo.dir/bank_conflict.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/shared_mem/bank_conflict.cu",
+  "output": "shared_mem/CMakeFiles/bank_conflict_demo.dir/bank_conflict.cu.o"
+},
+{
+  "directory": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/out/build/gcc-debug",
+  "command": "/usr/local/cuda/bin/nvcc -forward-unknown-to-host-compiler -DFMT_UNICODE=0 -I/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/utils -isystem /usr/local/cuda/targets/x86_64-linux/include -g -std=c++17 \"--generate-code=arch=compute_80,code=[compute_80,sm_80]\" --expt-relaxed-constexpr --extended-lambda -x cu -c /media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/hgemm_tensorcore/hgemm_main.cu -o hgemm_tensorcore/CMakeFiles/hgemm_tensorcore.dir/hgemm_main.cu.o",
+  "file": "/media/mintinson/新加卷/learningSomething/cuda_learn/cuda_practice/hgemm_tensorcore/hgemm_main.cu",
+  "output": "hgemm_tensorcore/CMakeFiles/hgemm_tensorcore.dir/hgemm_main.cu.o"
+}
+]

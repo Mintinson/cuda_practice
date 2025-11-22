@@ -1,0 +1,10 @@
+.vscode/
+build/
+.idea/
+.cache/
+out/
+
+# MacOS Cache
+.DS_Store
+
+

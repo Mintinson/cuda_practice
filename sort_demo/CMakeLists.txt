@@ -1,0 +1,7 @@
+add_executable(sort_demo)
+target_sources(sort_demo PRIVATE sort_main.cu radix_sort.cuh bitonic_sort.cuh quick_sort.cuh merge_sort.cuh)
+set_property(TARGET sort_demo PROPERTY CUDA_ARCHITECTURES 80)
+target_link_directories(sort_demo PRIVATE cuda::cudart)
+target_compile_options(sort_demo PRIVATE "--expt-relaxed-constexpr")
+target_compile_options(sort_demo PRIVATE "--extended-lambda")
+set_target_properties(sort_demo PROPERTIES CUDA_SEPARABLE_COMPILATION ON)

@@ -1,0 +1,8 @@
+add_executable(hgemm_tensorcore hgemm_main.cu)
+set_target_properties(hgemm_tensorcore PROPERTIES CXX_STANDARD 20)
+set_property(TARGET hgemm_tensorcore PROPERTY CUDA_ARCHITECTURES 80)
+target_link_libraries(hgemm_tensorcore PRIVATE CUDA::cudart CUDA::cudart_static CUDA::cublas)
+target_include_directories(hgemm_tensorcore PRIVATE ${CUDA_CUBLAS_DIRS})
+target_compile_options(hgemm_tensorcore PRIVATE "--expt-relaxed-constexpr")
+target_compile_options(hgemm_tensorcore PRIVATE "--extended-lambda")
+target_compile_options(hgemm_tensorcore PRIVATE -lineinfo)

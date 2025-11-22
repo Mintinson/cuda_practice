@@ -1,0 +1,6 @@
+add_executable(scan_demo)
+target_sources(scan_demo PRIVATE scan_main.cu)
+set_property(TARGET scan_demo PROPERTY CUDA_ARCHITECTURES 80)
+target_link_directories(scan_demo PRIVATE cuda::cudart)
+target_compile_options(scan_demo PRIVATE "--expt-relaxed-constexpr")
+target_compile_options(scan_demo PRIVATE "--extended-lambda")

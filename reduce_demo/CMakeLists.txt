@@ -1,0 +1,6 @@
+add_executable(reduce_0)
+target_sources(reduce_0 PRIVATE reduce_0.cu reduce_v1.cuh)
+set_property(TARGET reduce_0 PROPERTY CUDA_ARCHITECTURES 80)
+target_link_directories(reduce_0 PRIVATE cuda::cudart)
+target_compile_options(reduce_0 PRIVATE "--expt-relaxed-constexpr")
+target_compile_options(reduce_0 PRIVATE "--extended-lambda")
