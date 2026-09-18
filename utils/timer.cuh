@@ -8,28 +8,39 @@
 #include <type_traits>
 
 struct GpuTimer {
-    cudaEvent_t start_;
-    cudaEvent_t stop_;
+    cudaEvent_t start_{nullptr};
+    cudaEvent_t stop_{nullptr};
 
-    GpuTimer()
+    // 事件延迟创建：全局 GpuTimer 的构造函数在静态初始化期就调用 CUDA runtime，
+    // 早于 fatbin 注册。静态链接 cudart 时这会让之后所有 kernel 启动静默失效
+    // （launch 返回 cudaSuccess 但什么也没执行），所以推迟到第一次 start/stop。
+    void ensureCreated()
     {
-        cudaEventCreate(&start_);
-        cudaEventCreate(&stop_);
+        if (start_ == nullptr) {
+            cudaEventCreate(&start_);
+            cudaEventCreate(&stop_);
+        }
     }
+
+    GpuTimer() = default;
 
     ~GpuTimer()
     {
-        cudaEventDestroy(start_);
-        cudaEventDestroy(stop_);
+        if (start_ != nullptr) {
+            cudaEventDestroy(start_);
+            cudaEventDestroy(stop_);
+        }
     }
 
     void start()
     {
+        ensureCreated();
         cudaEventRecord(start_, 0);
     }
 
     void stop()
     {
+        ensureCreated();
         cudaEventRecord(stop_, 0);
     }
     template <typename Res = float>
