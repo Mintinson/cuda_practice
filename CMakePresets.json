@@ -1,15 +1,55 @@
 {
-    "version": 3,
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 28,
+        "patch": 0
+    },
     "configurePresets": [
         {
-            "name": "windows-base",
+            "name": "base",
             "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "installDir": "${sourceDir}/out/install/${presetName}",
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "cl.exe",
-                "CMAKE_CXX_COMPILER": "cl.exe"
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "mode-debug",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "mode-release",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "compiler-msvc",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+                "CMAKE_CXX_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+                "CMAKE_CUDA_HOST_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe"
+            },
+            "environment": {
+                "PATH": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64;C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64;$penv{PATH}",
+                "INCLUDE": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/include;C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/ATLMFC/include;C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/VS/include;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/ucrt;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/um;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/shared;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/winrt;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/cppwinrt",
+                "EXTERNAL_INCLUDE": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/include;C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/ATLMFC/include;C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/VS/include;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/ucrt;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/um;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/shared;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/winrt;C:/Program Files (x86)/Windows Kits/10/include/10.0.26100.0/cppwinrt",
+                "LIB": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/ATLMFC/lib/x64;C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/lib/x64;C:/Program Files (x86)/Windows Kits/10/lib/10.0.26100.0/ucrt/x64;C:/Program Files (x86)/Windows Kits/10/lib/10.0.26100.0/um/x64",
+                "VSCMD_VER": null,
+                "VCINSTALLDIR": null,
+                "VCToolsInstallDir": null,
+                "VCToolsVersion": null,
+                "VSINSTALLDIR": null,
+                "VisualStudioVersion": null,
+                "__VSCMD_PREINIT_VCToolsVersion": null
             },
             "condition": {
                 "type": "equals",
@@ -18,178 +58,412 @@
             }
         },
         {
-            "name": "x64-debug",
-            "displayName": "x64 Debug",
-            "inherits": "windows-base",
-            "architecture": {
-                "value": "x64",
-                "strategy": "external"
-            },
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
-        },
-        {
-            "name": "x64-release",
-            "displayName": "x64 Release",
-            "inherits": "x64-debug",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
-        },
-        {
-            "name": "x86-debug",
-            "displayName": "x86 Debug",
-            "inherits": "windows-base",
-            "architecture": {
-                "value": "x86",
-                "strategy": "external"
-            },
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
-        },
-        {
-            "name": "x86-release",
-            "displayName": "x86 Release",
-            "inherits": "x86-debug",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
-        },
-        {
-            "name": "minGW-base",
+            "name": "compiler-clang-cl",
             "hidden": true,
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "installDir": "${sourceDir}/out/install/${presetName}",
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "clang-cl.exe"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "compiler-gcc",
+            "hidden": true,
+            "cacheVariables": {
                 "CMAKE_CXX_COMPILER": "g++"
-            },
-            "condition": {
-                "type": "equals",
-                "lhs": "${hostSystemName}",
-                "rhs": "Windows"
             }
         },
         {
-            "name": "mingw-debug",
-            "displayName": "MinGW Debug",
-            "inherits": "minGW-base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
-        },
-        {
-            "name": "mingw-release",
-            "displayName": "MinGW Release",
-            "inherits": "minGW-base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
-        },
-        {
-            "name": "gcc-base",
+            "name": "compiler-clang",
             "hidden": true,
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "installDir": "${sourceDir}/out/install/${presetName}",
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "gcc-9",
-                "CMAKE_CXX_COMPILER": "g++-9"
-            },
-            "environment": {
-                "VCPKG_ROOT": "/home/mintinson/Downloads/vcpkg"
-            },
-            "condition": {
-                "type": "equals",
-                "lhs": "${hostSystemName}",
-                "rhs": "Linux"
-            },
-            "vendor": {
-                "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
-                    "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
-                }
+                "CMAKE_CXX_COMPILER": "clang++"
             }
         },
         {
-            "name": "clang-base",
+            "name": "compiler-clang-libcxx",
             "hidden": true,
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "installDir": "${sourceDir}/out/install/${presetName}",
+            "inherits": "compiler-clang",
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "clang",
-                "CMAKE_CXX_COMPILER": "clang++",
-                "CMAKE_CXX_FLAGS": "-stdlib=libc++ -fuse-ld=lld"
-            },
-            "condition": {
-                "type": "equals",
-                "lhs": "${hostSystemName}",
-                "rhs": "Linux"
-            },
-            "environment": {
-                "C": "clang",
-                "CXX": "clang++",
-                "VCPKG_ROOT": "/home/mintinson/Downloads/vcpkg"
-            },
-            "vendor": {
-                "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
-                    "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
-                }
+                "CMAKE_CXX_FLAGS": "-stdlib=libc++"
             }
+        },
+        {
+            "name": "cuda-nvcc",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_CUDA_COMPILER": "nvcc",
+                "CMAKE_CUDA_FLAGS": "--allow-unsupported-compiler"
+            }
+        },
+        {
+            "name": "cuda-clang-toolchain",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_CUDA_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "msvc-debug",
+            "displayName": "MSVC Debug",
+            "inherits": [
+                "base",
+                "compiler-msvc",
+                "mode-debug"
+            ]
+        },
+        {
+            "name": "msvc-release",
+            "displayName": "MSVC Release",
+            "inherits": [
+                "base",
+                "compiler-msvc",
+                "mode-release"
+            ]
+        },
+        {
+            "name": "clang-cl-debug",
+            "displayName": "clang-cl Debug",
+            "inherits": [
+                "base",
+                "compiler-clang-cl",
+                "mode-debug"
+            ]
+        },
+        {
+            "name": "clang-cl-release",
+            "displayName": "clang-cl Release",
+            "inherits": [
+                "base",
+                "compiler-clang-cl",
+                "mode-release"
+            ]
         },
         {
             "name": "gcc-debug",
             "displayName": "GCC Debug",
-            "inherits": "gcc-base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
+            "inherits": [
+                "base",
+                "compiler-gcc",
+                "mode-debug"
+            ]
         },
         {
             "name": "gcc-release",
             "displayName": "GCC Release",
-            "inherits": "gcc-base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
+            "inherits": [
+                "base",
+                "compiler-gcc",
+                "mode-release"
+            ]
         },
         {
             "name": "clang-debug",
             "displayName": "Clang Debug",
-            "inherits": "clang-base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
+            "inherits": [
+                "base",
+                "compiler-clang",
+                "mode-debug"
+            ]
         },
         {
             "name": "clang-release",
             "displayName": "Clang Release",
-            "inherits": "clang-base",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
+            "inherits": [
+                "base",
+                "compiler-clang",
+                "mode-release"
+            ]
         },
         {
-            "name": "macos-debug",
-            "displayName": "macOS Debug",
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "installDir": "${sourceDir}/out/install/${presetName}",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            },
+            "name": "clang-libcxx-debug",
+            "displayName": "Clang + libc++ Debug",
+            "inherits": [
+                "base",
+                "compiler-clang-libcxx",
+                "mode-debug"
+            ]
+        },
+        {
+            "name": "clang-libcxx-release",
+            "displayName": "Clang + libc++ Release",
+            "inherits": [
+                "base",
+                "compiler-clang-libcxx",
+                "mode-release"
+            ]
+        },
+        {
+            "name": "cuda-gcc-debug",
+            "displayName": "CUDA (GCC) Debug",
+            "inherits": [
+                "base",
+                "compiler-gcc",
+                "mode-debug",
+                "cuda-nvcc"
+            ]
+        },
+        {
+            "name": "cuda-gcc-release",
+            "displayName": "CUDA (GCC) Release",
+            "inherits": [
+                "base",
+                "compiler-gcc",
+                "mode-release",
+                "cuda-nvcc"
+            ]
+        },
+        {
+            "name": "cuda-clang-debug",
+            "displayName": "CUDA (Clang) Debug",
+            "inherits": [
+                "base",
+                "compiler-clang",
+                "mode-debug",
+                "cuda-clang-toolchain"
+            ]
+        },
+        {
+            "name": "cuda-clang-release",
+            "displayName": "CUDA (Clang) Release",
+            "inherits": [
+                "base",
+                "compiler-clang",
+                "mode-release",
+                "cuda-clang-toolchain"
+            ]
+        },
+        {
+            "name": "cuda-msvc-debug",
+            "displayName": "CUDA (MSVC) Debug",
+            "inherits": [
+                "base",
+                "compiler-msvc",
+                "mode-debug",
+                "cuda-nvcc"
+            ]
+        },
+        {
+            "name": "cuda-msvc-release",
+            "displayName": "CUDA (MSVC) Release",
+            "inherits": [
+                "base",
+                "compiler-msvc",
+                "mode-release",
+                "cuda-nvcc"
+            ]
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "windows-only-build",
+            "hidden": true,
             "condition": {
                 "type": "equals",
                 "lhs": "${hostSystemName}",
-                "rhs": "Darwin"
-            },
-            "vendor": {
-                "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
-                    "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
-                }
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "msvc-debug",
+            "inherits": "windows-only-build",
+            "configurePreset": "msvc-debug"
+        },
+        {
+            "name": "msvc-release",
+            "inherits": "windows-only-build",
+            "configurePreset": "msvc-release"
+        },
+        {
+            "name": "clang-cl-debug",
+            "inherits": "windows-only-build",
+            "configurePreset": "clang-cl-debug"
+        },
+        {
+            "name": "clang-cl-release",
+            "inherits": "windows-only-build",
+            "configurePreset": "clang-cl-release"
+        },
+        {
+            "name": "gcc-debug",
+            "configurePreset": "gcc-debug"
+        },
+        {
+            "name": "gcc-release",
+            "configurePreset": "gcc-release"
+        },
+        {
+            "name": "clang-debug",
+            "configurePreset": "clang-debug"
+        },
+        {
+            "name": "clang-release",
+            "configurePreset": "clang-release"
+        },
+        {
+            "name": "clang-libcxx-debug",
+            "configurePreset": "clang-libcxx-debug"
+        },
+        {
+            "name": "clang-libcxx-release",
+            "configurePreset": "clang-libcxx-release"
+        },
+        {
+            "name": "cuda-gcc-debug",
+            "configurePreset": "cuda-gcc-debug"
+        },
+        {
+            "name": "cuda-gcc-release",
+            "configurePreset": "cuda-gcc-release"
+        },
+        {
+            "name": "cuda-clang-debug",
+            "configurePreset": "cuda-clang-debug"
+        },
+        {
+            "name": "cuda-clang-release",
+            "configurePreset": "cuda-clang-release"
+        },
+        {
+            "name": "cuda-msvc-debug",
+            "inherits": "windows-only-build",
+            "configurePreset": "cuda-msvc-debug"
+        },
+        {
+            "name": "cuda-msvc-release",
+            "inherits": "windows-only-build",
+            "configurePreset": "cuda-msvc-release"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "windows-only-test",
+            "hidden": true,
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "msvc-debug",
+            "inherits": "windows-only-test",
+            "configurePreset": "msvc-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "msvc-release",
+            "inherits": "windows-only-test",
+            "configurePreset": "msvc-release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "clang-cl-debug",
+            "inherits": "windows-only-test",
+            "configurePreset": "clang-cl-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "clang-cl-release",
+            "inherits": "windows-only-test",
+            "configurePreset": "clang-cl-release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "gcc-debug",
+            "configurePreset": "gcc-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "gcc-release",
+            "configurePreset": "gcc-release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "clang-debug",
+            "configurePreset": "clang-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "clang-release",
+            "configurePreset": "clang-release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "clang-libcxx-debug",
+            "configurePreset": "clang-libcxx-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "clang-libcxx-release",
+            "configurePreset": "clang-libcxx-release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "cuda-gcc-debug",
+            "configurePreset": "cuda-gcc-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "cuda-gcc-release",
+            "configurePreset": "cuda-gcc-release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "cuda-clang-debug",
+            "configurePreset": "cuda-clang-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "cuda-clang-release",
+            "configurePreset": "cuda-clang-release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "cuda-msvc-debug",
+            "inherits": "windows-only-test",
+            "configurePreset": "cuda-msvc-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "cuda-msvc-release",
+            "inherits": "windows-only-test",
+            "configurePreset": "cuda-msvc-release",
+            "output": {
+                "outputOnFailure": true
             }
         }
     ]

@@ -6,13 +6,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CUDA_STANDARD 17)
 
-project(cuda_practice VERSION 1.0 LANGUAGES C CXX CUDA)
 
+
+project(cuda_practice VERSION 1.0 LANGUAGES C CXX CUDA)
+if(MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--allow-unsupported-compiler>")
+endif()
 if(WIN32)
     # add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
     # add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
      add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=/utf-8>")
+
 endif()
+
 
 include(FindCUDAToolkit REQUIRED)
 
@@ -42,3 +48,4 @@ add_subdirectory(occupancy)
 add_subdirectory(shared_mem)
 add_subdirectory(hgemm_tensorcore)
 add_subdirectory(cutlass_learn)
+add_subdirectory(softmax_demo)
