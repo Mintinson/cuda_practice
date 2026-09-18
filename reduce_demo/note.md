@@ -315,7 +315,7 @@ __global__ void reduce_kernel_v7(const T* input, T* output, size_t sz, ReduceOp 
 
 具体与硬件相关，这里不做过多解释。
 
-### 优化 9 考虑使用 cuda shuffle 指令
+## 优化 9 考虑使用 cuda shuffle 指令
 
 > `warp shuffle` 函数是cuda提供的在warp内直接进行数据交换的函数，灵活地使用能够避免共享内存的开销，支持灵活的线程间的数据传递。
 
@@ -398,6 +398,105 @@ __global__ void reduce_kernel_v9(const T* input, T* output, size_t sz, T init, R
 
 完整代码见 [reduce_v9](reduce_v9.cuh)。
 
+## 优化 10 向量化加载 + Grid Stride Loop
+
+GPU 的内存系统以**事务（Transaction）**为粒度传输数据，每次事务通常为 128 字节。如果每个线程每次只加载 4 字节（1 个 float），则：
+
+* 一个 Warp 32 线程 × 4 字节 = 128 字节，恰好一个事务
+* 但每条加载指令的调度开销是固定的
+
+改为使用 float4（16 字节），每个线程每次加载 4 个 float：
+
+* 每条 `ld.global.v4.f32` 指令的数据吞吐是 `ld.global.f32` 的 4 倍
+* 在相同的循环迭代次数下，处理的数据量翻 4 倍，等效地减少了循环次数
+* 提升指令级并行（ILP），让访存流水线更饱和
+
+**在带宽受限的规约任务中，向量化通常能提升 1.5~3 倍 的吞吐**。
+
+除此之外，该方法还使用了 **Grid Stride Loop** 的常用技术，也就是网格跨步循环，不要求"每个线程只处理一个元素"，而是让每个线程以 `gridDim.x` * `blockDim.x` 为步长，循环处理多个元素。
+
+```cpp
+for (int idx = blockIdx.x * blockDim.x + tid;
+     idx < n4;
+     idx += gridDim.x * blockDim.x)
+{
+    ...
+}
+```
+
+```cpp
+template <typename T, typename ReduceOp>
+__global__ void reduce_kernel_v10(T *input, T *output, size_t sz, T init, ReduceOp op)
+{
+    int tid = threadIdx.x;
+    int lane = tid % 32;
+    int wid = tid / 32;
+
+    // float4 加载：每线程每次处理 4 个 float
+    auto *input4 = fetch_vec4_ptr(input);
+    size_t n4 = sz / 4; // float4 的元素数量
+
+    T val = init;
+
+    // Grid Stride Loop：每个线程以 gridDim.x * blockDim.x 为步长迭代
+    // 注意，这里每个线程都有这个循环，因此一次核函数，就将所有元素合并到了 
+    // gridDim.x * blockDim.x 个线程中的 val 中
+    for (size_t idx = blockIdx.x * blockDim.x + tid;
+         idx < n4;
+         idx += gridDim.x * blockDim.x)
+    {
+        // 连取 4 个元素
+        auto data = input4[idx];
+        val = op(val, op(data.x, op(data.y, op(data.z, data.w))));
+    }
+
+    // 处理 n 不是 4 的倍数时的尾部元素
+    size_t tail_start = n4 * 4;
+#pragma unroll
+    for (size_t idx = tail_start + blockIdx.x * blockDim.x + tid;
+         idx < sz;
+         idx += gridDim.x * blockDim.x)
+    {
+        // val += input[idx];
+        val = op(val, input[idx]);
+    }
+
+    // Warp 内规约
+    // 将 gridDim.x * blockDim.x 个线程中的 val 按照 warp 合并
+    for (int offset = 16; offset > 0; offset >>= 1)
+    {
+        val = op(val, __shfl_down_sync(0xffffffff, val, offset));
+    }
+
+    __shared__ T warp_results[32];
+    // warp 中第一个元素负责将其放到 shared mem 中
+    if (lane == 0)
+        warp_results[wid] = val;
+    __syncthreads();
+
+    int num_warps = blockDim.x / 32;
+    // 每个block中的第一个 warp 的线程负责从 shared memo 中取值
+    if (wid == 0)
+    {
+        // Combine the results from all warps
+        val = (lane < num_warps) ? warp_results[lane] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1)
+        {
+            val = op(val, __shfl_down_sync(0xffffffff, val, offset));
+        }
+    }
+
+    // 每个block中的第一个线程负责保存最终值
+    if (tid == 0)
+        output[blockIdx.x] = val;
+    
+    // 最终output 保存 grid_size 个值
+    // 因此后续还要做一次长度为 grid_size 的 reduce
+}
+
+```
+
+
 ## 使用第三方库
 
 ### 使用 [Thrust](https://nvidia.github.io/cccl/thrust/index.html)
@@ -413,9 +512,45 @@ __global__ void reduce_kernel_v9(const T* input, T* output, size_t sz, T init, R
             timer.stop();
 ```
 
-性能普遍在上述 [优化5](#优化-5-解决-idle-线程) 和 [优化6](#优化-6-人工展开最后一层循环以减少同步) 之间波动 (`gcc9 ubuntu22.04, cuda12.0`)
+为了测试单纯计算花费的时间，而排除 D2H 的额外消耗，这里使用 `async::reduce_into`
 
-在 Windows (`_MSC_VER = 1942 cuda 11.8`) 上性能最高，且远大于其他 CUDA 实现。
+```cpp
+return thrust::async::reduce_into(
+            thrust::cuda::par.on(0),
+            d_input.cbegin(), 
+            d_input.cend(), 
+            d_thrust_output.begin(),
+            T{}, thrust::plus<T>{});
+
+// 要取数据直接拷贝
+T thrust_result{};
+checkCudaErrors(cudaMemcpy(
+        &thrust_result, thrust::raw_pointer_cast(d_thrust_output.data()),
+        sizeof(T), cudaMemcpyDeviceToHost));
+```
+
+其性能非常不错。
+
+### 使用 [Cub](https://nvidia.github.io/cccl/unstable/cub/index.html)
+
+cub 比 thrust 更加底层（比如要手动管理内存分配），但是其在各种 GPU 架构上做了针对性优化，通常能达到 90% 以上的带宽利用率，且维护成本为零。
+
+```cpp
+    T *d_cub_output{};
+    void *d_temp_storage{};
+    size_t temp_storage_bytes = 0;
+    checkCudaErrors(cudaMalloc(&d_cub_output, sizeof(T)));
+    checkCudaErrors(cub::DeviceReduce::Sum(
+        d_temp_storage, temp_storage_bytes, input_ptr, d_cub_output, size));
+    checkCudaErrors(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+
+    T cub_device_result{};
+    const double cub_device_ms = benchmarkCuda([&]
+                                               { checkCudaErrors(cub::DeviceReduce::Sum(
+                                                     d_temp_storage, temp_storage_bytes, input_ptr, d_cub_output, size)); });
+    checkCudaErrors(cudaMemcpy(
+        &cub_device_result, d_cub_output, sizeof(T), cudaMemcpyDeviceToHost));
+```
 
 ## 扩展
 

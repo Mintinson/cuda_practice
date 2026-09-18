@@ -1,34 +1,86 @@
+from __future__ import annotations
+
+import argparse
+import csv
+from collections import defaultdict
+from pathlib import Path
+
 import matplotlib.pyplot as plt
-import numpy as np
 
-size = np.array([49005503, 82561802, 116122637, 149690941, 183268583],
-                dtype=np.float64)
 
-times = np.array([
-    # [75.2668, 258.414, 574.523, 960.134, 1520.09],
-    #   [74.6466, 257.515, 564.106, 963.638, 1522.64],
-    # [3.69037, 12.5338, 28.8301, 43.213, 67.1902],
-    # [2.48456, 7.89534, 15.8501, 26.2499, 42.896],
-    # [2.63124, 7.90201, 15.8771, 27.5215, 44.954],
-    # [2.0261, 6.8898, 14.919, 23.6303, 39.1442],
-    # [1.07776, 3.46467, 7.18455, 12.3607, 21.3182],
-    [0.991037, 3.17355, 6.60883, 11.2465, 19.1821],
-    [0.940352, 3.43215, 6.57324, 11.2579, 18.9673],
-    [1.0012, 3.31876, 6.86332, 11.1937, 18.6628]
-])
-legends = [
-    # "CPU (accumulate loop)",
-    # "CPU (raw loop)",
-    # "reduce_v1",
-    # "reduce_v2",
-    # "reduce_v3",
-    # "reduce_v4",
-    # "reduce_v5",
-    "reduce_v6",
-    "reduce_v7",
-    "reduce_v9",
-]
-plt.plot(size, times.T)
-plt.axis('tight')
-plt.legend(legends)
-plt.show()
+def load_records(path: Path) -> dict[str, list[tuple[int, float]]]:
+    records: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    with path.open("r", encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        expected = {"method", "elements", "mean_ms"}
+        if reader.fieldnames is None or set(reader.fieldnames) != expected:
+            raise ValueError(
+                f"Expected CSV columns {sorted(expected)}, got {reader.fieldnames}"
+            )
+        for row in reader:
+            records[row["method"]].append(
+                (int(row["elements"]), float(row["mean_ms"]))
+            )
+
+    for values in records.values():
+        values.sort(key=lambda item: item[0])
+    return dict(records)
+
+
+def draw(records: dict[str, list[tuple[int, float]]], output: Path) -> None:
+    cpu_records = {k: v for k, v in records.items() if k.startswith("CPU")}
+    gpu_records = {k: v for k, v in records.items() if k.startswith("GPU")}
+    panels = [("GPU reductions", gpu_records), ("CPU reductions", cpu_records)]
+    panels = [(title, data) for title, data in panels if data]
+    if not panels:
+        raise ValueError("CSV contains no CPU or GPU benchmark records")
+
+    figure, axes = plt.subplots(
+        len(panels), 1, figsize=(12, 5 * len(panels)), squeeze=False
+    )
+    for axis, (title, data) in zip(axes.flat, panels):
+        for method, values in data.items():
+            elements = [value[0] for value in values]
+            milliseconds = [value[1] for value in values]
+            axis.plot(elements, milliseconds, marker="o", label=method)
+        axis.set_title(title)
+        axis.set_xlabel("Elements")
+        axis.set_ylabel("Mean time (ms)")
+        axis.grid(True, alpha=0.3)
+        axis.legend(fontsize="small", ncols=2)
+
+    figure.tight_layout()
+    figure.savefig(output, dpi=160)
+    print(f"Saved plot to {output.resolve()}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Plot reduce_0 benchmark CSV output."
+    )
+    parser.add_argument(
+        "csv",
+        nargs="?",
+        type=Path,
+        default=Path("reduce_benchmark.csv"),
+        help="CSV emitted by reduce_0 (default: reduce_benchmark.csv)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("reduce_benchmark.png"),
+        help="Output image path (default: reduce_benchmark.png)",
+    )
+    parser.add_argument(
+        "--show", action="store_true", help="Also open an interactive plot window"
+    )
+    args = parser.parse_args()
+
+    draw(load_records(args.csv), args.output)
+    if args.show:
+        plt.show()
+
+
+if __name__ == "__main__":
+    main()
