@@ -1,3 +1,7 @@
+/**
+ * this is a checker program to check the cuda programming environment is correctly set up or not.
+ */
+
 #include "helper.cuh"
 #include "timer.cuh"
 #include <cstdio>
@@ -17,14 +21,15 @@ __global__ void kernel()
 
 int main()
 {
-
+    helper::print_device_info();
     printf("Hello World\n");
     // kernel<<<1, 10>>>();
     // cudaDeviceSynchronize();
     StdTimer timer;
     timer.start();
-    int res {};
-    for (int i = 0; i < 1000; ++i) {
+    int res{};
+    for (int i = 0; i < 1000; ++i)
+    {
         // int res = 10;
         res += i;
         // helper::do_not_optimize_away(res);
