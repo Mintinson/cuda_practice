@@ -558,3 +558,6 @@ cub 比 thrust 更加底层（比如要手动管理内存分配），但是其�
 
 # 测试结果
 
+![reduce](reduce_benchmark.png)
+
+使用的 GPU：RTX4060 Mobile

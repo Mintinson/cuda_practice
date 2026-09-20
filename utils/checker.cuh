@@ -59,6 +59,8 @@ void check_difference(T* a, T* b, size_t size, T eps = {})
             }
         }
     }
+
+
     std::cout << "Checking passed!\n";
 }
 } // namespace helper

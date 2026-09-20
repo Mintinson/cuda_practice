@@ -1,187 +1,367 @@
 #include "checker.cuh"
-#include "random_gen.hpp"
-// #include "timer.cuh"
 #include "helper.cuh"
 #include "naive.cuh"
+#include "random_gen.hpp"
+#include "timer.cuh"
 #include "vec2_optimize.cuh"
 #include "vec4_optimize.cuh"
+
 #include <algorithm>
 #include <cstddef>
-#include <cstdio>
+#include <cstdlib>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
-#include <functional>
+#include <execution>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <numeric>
+#include <string>
 #include <thrust/device_vector.h>
-#include <thrust/host_vector.h>
+#include <thrust/execution_policy.h>
 #include <thrust/transform.h>
-constexpr size_t N = 1024 * 1024 * 64;
-constexpr int BlockDim = 128;
+#include <type_traits>
+#include <utility>
+#include <vector>
 
-#ifdef _DEBUG
-constexpr const char* const BuildType = "Debug";
-#else
-#ifndef NDEBUG
-constexpr const char* const BuildType = "Debug";
-#else
-constexpr const char* const BuildType = "Release";
-#endif
-#endif
+constexpr size_t DefaultBaseSize = 1024ULL * 1024 * 64;
+constexpr int DefaultCaseCount = 8;
+constexpr int BlockDim = 256;
+constexpr int WarmupRuns = 5;
+constexpr int MeasuredRuns = 20;
+constexpr const char *BenchmarkCsv = "element_wise_benchmark.csv";
 
-GpuTimer timer;
-
-template <typename T, typename Operator>
-void naive_element_wise(const T* input_a, const T* input_b, T* output, size_t size, Operator oper)
+struct BenchmarkRecord
 {
-    helper::DeviceDataHandler d_input_a(input_a, size);
-    helper::DeviceDataHandler d_input_b(input_b, size);
-    helper::DeviceDataHandler<T> d_output(size);
-    timer.start();
-    element_wise_naive_kernel<<<(size + BlockDim - 1) / BlockDim, BlockDim>>>(
-        d_input_a.data, d_input_b.data, d_output.data, size, oper);
-    cudaDeviceSynchronize();
-    timer.stop();
-    std::cout << "GPU (naive): " << timer.elapsed() << "" << timer.unit() << std::endl;
-
-    d_output.cpyToHost(output);
-}
-template <typename T, typename Operator>
-void vec2_element_wise(const T* input_a, const T* input_b, T* output, size_t size, Operator oper)
-{
-    helper::DeviceDataHandler d_input_a(input_a, size);
-    helper::DeviceDataHandler d_input_b(input_b, size);
-    helper::DeviceDataHandler<T> d_output(size);
-    timer.start();
-    vec2_element_wise_kernel<<<(size + BlockDim - 1) / BlockDim / 2, BlockDim>>>(
-        d_input_a.data, d_input_b.data, d_output.data, size, oper);
-    cudaDeviceSynchronize();
-
-    timer.stop();
-    std::cout << "GPU (vec2): " << timer.elapsed() << "" << timer.unit() << std::endl;
-
-    d_output.cpyToHost(output);
-}
-template <typename T, typename Operator>
-void vec4_element_wise(const T* input_a, const T* input_b, T* output, size_t size, Operator oper)
-{
-    helper::DeviceDataHandler d_input_a(input_a, size);
-    helper::DeviceDataHandler d_input_b(input_b, size);
-    helper::DeviceDataHandler<T> d_output(size);
-    timer.start();
-    vec4_element_wise_kernel<<<(size + BlockDim - 1) / BlockDim / 4, BlockDim>>>(
-        d_input_a.data, d_input_b.data, d_output.data, size, oper);
-    cudaDeviceSynchronize();
-    timer.stop();
-    std::cout << "GPU (vec4): " << timer.elapsed() << "" << timer.unit() << std::endl;
-    d_output.cpyToHost(output);
-}
-
-enum class CUBLASOperationType {
-    Aad,
-    Subtract
+    std::string method;
+    size_t elements{};
+    double mean_ms{};
+    double effective_bandwidth_gbps{};
+    double bandwidth_utilization_pct{};
 };
 
-template <typename T, CUBLASOperationType Operator>
-void cublas_element_wise(const T* input_a, const T* input_b, T* output, size_t size)
+class BenchmarkLogger
 {
-    static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
-        "Cublas only supports float and double");
-    cublasHandle_t handle;
-    cublasCreate(&handle);
-    T* d_input_a;
-    T* d_input_b;
-    // T* d_output;
-    checkCudaErrors(cudaMalloc((void**)&d_input_a, size * sizeof(T)));
-    checkCudaErrors(cudaMalloc((void**)&d_input_b, size * sizeof(T)));
-    cublasSetVector(size, sizeof(T), input_a, 1, d_input_a, 1);
-    cublasSetVector(size, sizeof(T), input_b, 1, d_input_b, 1);
-    if constexpr (Operator == CUBLASOperationType::Aad) {
-        T alpha = static_cast<T>(1.0);
-        timer.start();
-        // y[i] = alpha * x[i] + y[i]
-        if constexpr (std::is_same_v<T, float>) {
-            cublasSaxpy_v2(handle, size, &alpha, d_input_a, 1, d_input_b, 1);
-        } else if constexpr (std::is_same_v<T, double>) {
-            cublasDaxpy_v2(handle, size, &alpha, d_input_a, 1, d_input_b, 1);
-        }
-        cudaDeviceSynchronize();
-        timer.stop();
-        std::cout << "GPU (cublas): " << timer.elapsed() << "" << timer.unit() << std::endl;
-        cublasGetVector(size, sizeof(T), d_input_b, 1, output, 1);
-    } else if constexpr (Operator == CUBLASOperationType::Subtract) {
-        T alpha = static_cast<T>(-1.0);
-        timer.start();
-        // x[i] = -alpha * y[i] + x[i]
-        if constexpr (std::is_same_v<T, float>) {
-            cublasSaxpy_v2(handle, size, &alpha, d_input_b, 1, d_input_a, 1);
-        } else if constexpr (std::is_same_v<T, double>) {
-            cublasDaxpy_v2(handle, size, &alpha, d_input_b, 1, d_input_a, 1);
-        }
-        cudaDeviceSynchronize();
-        timer.stop();
-        std::cout << "GPU (cublas): " << timer.elapsed() << "" << timer.unit() << std::endl;
-        cublasGetVector(size, sizeof(T), d_input_a, 1, output, 1);
+public:
+    void record(BenchmarkRecord record)
+    {
+        records_.push_back(std::move(record));
     }
-    checkCudaErrors(cudaFree(d_input_a));
-    checkCudaErrors(cudaFree(d_input_b));
-    cublasDestroy(handle);
+
+    void save(const std::string &filename) const
+    {
+        std::ofstream output(filename, std::ios::out);
+        if (!output)
+        {
+            std::cerr << "Failed to open " << filename << '\n';
+            return;
+        }
+
+        output << "method,elements,mean_ms,effective_bandwidth_gbps,"
+                  "bandwidth_utilization_pct\n";
+        output << std::setprecision(10);
+        for (const auto &record : records_)
+        {
+            output << std::quoted(record.method) << ','
+                   << record.elements << ','
+                   << record.mean_ms << ','
+                   << record.effective_bandwidth_gbps << ','
+                   << record.bandwidth_utilization_pct << '\n';
+        }
+    }
+
+private:
+    std::vector<BenchmarkRecord> records_;
+};
+
+void checkCublas(cublasStatus_t status, const char *operation)
+{
+    if (status != CUBLAS_STATUS_SUCCESS)
+    {
+        std::cerr << "cuBLAS error " << static_cast<int>(status)
+                  << " while calling " << operation << '\n';
+        std::exit(EXIT_FAILURE);
+    }
 }
 
-int main()
+double theoreticalPeakBandwidthGBps()
 {
-    for (int i = 1; i < 8 + 1; ++i) {
+    int device = 0;
+    checkCudaErrors(cudaGetDevice(&device));
+    cudaDeviceProp properties{};
+    checkCudaErrors(cudaGetDeviceProperties(&properties, device));
+    return 2.0 * properties.memoryClockRate *
+           (properties.memoryBusWidth / 8.0) / 1.0e6;
+}
 
-        using ValueType = float;
-        std::cout << "Build type: " << BuildType << " with element: " << N * i << "\n";
-        auto randVec = helper::generate_sequence<float>(N * i);
-        auto randVec2 = helper::generate_sequence<float>(randVec.size());
-        auto cpuRes = decltype(randVec)(randVec.size());
-        auto cpuRes2 = decltype(randVec)(randVec.size());
-        auto gpuNaive = decltype(randVec)(randVec.size());
-        auto gpuVec2 = decltype(randVec)(randVec.size());
-        auto gpuVec4 = decltype(randVec)(randVec.size());
-        auto gpuCublas = decltype(randVec)(randVec.size());
-
-        auto oper = std::minus<ValueType> {};
-
-        timer.start();
-        for (size_t i = 0; i < randVec.size(); ++i) {
-            cpuRes[i] = oper(randVec[i], randVec2[i]);
-        }
-        timer.stop();
-        std::cout << "CPU (raw loop): " << timer.elapsed() << "" << timer.unit() << std::endl;
-
-        timer.start();
-        std::transform(randVec.cbegin(), randVec.cend(), randVec2.cbegin(), cpuRes2.begin(), oper);
-        timer.stop();
-        std::cout << "CPU (std::transform): " << timer.elapsed() << "" << timer.unit() << std::endl;
-        helper::check_difference(cpuRes.data(), cpuRes2.data(), cpuRes.size());
-
-        naive_element_wise(randVec.data(), randVec2.data(), gpuNaive.data(), randVec.size(), oper);
-        helper::check_difference(cpuRes.data(), gpuNaive.data(), cpuRes.size());
-
-        vec2_element_wise(randVec.data(), randVec2.data(), gpuVec2.data(), randVec.size(), oper);
-        helper::check_difference(cpuRes.data(), gpuVec2.data(), cpuRes.size());
-
-        vec4_element_wise(randVec.data(), randVec2.data(), gpuVec4.data(), randVec.size(), oper);
-
-        helper::check_difference(cpuRes.data(), gpuVec4.data(), cpuRes.size());
-
-        cublas_element_wise<ValueType, CUBLASOperationType::Subtract>(
-            randVec.data(), randVec2.data(), gpuCublas.data(), randVec.size());
-        helper::check_difference(cpuRes.data(), gpuCublas.data(), cpuRes.size());
-
-        thrust::device_vector<ValueType> d_input_a(randVec);
-        thrust::device_vector<ValueType> d_input_b(randVec2);
-        thrust::device_vector<ValueType> d_output(randVec.size());
-        timer.start();
-        thrust::transform(
-            d_input_a.begin(), d_input_a.end(), d_input_b.begin(), d_output.begin(), oper);
-        cudaDeviceSynchronize();
-        timer.stop();
-        std::cout << "GPU (thrust): " << timer.elapsed() << "" << timer.unit() << std::endl;
-        thrust::host_vector<ValueType> gpuThrust = d_output;
-        helper::check_difference(cpuRes.data(), gpuThrust.data(), cpuRes.size());
-
-        std::cout << "\n";
+template <typename Prepare, typename Operation>
+double benchmarkCuda(Prepare &&prepare, Operation &&operation)
+{
+    for (int iteration = 0; iteration < WarmupRuns; ++iteration)
+    {
+        prepare();
+        operation();
     }
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    GpuTimer timer;
+    double total_ms = 0.0;
+    for (int iteration = 0; iteration < MeasuredRuns; ++iteration)
+    {
+        // Any setup queued by prepare executes before the start event and is
+        // intentionally excluded from the measured kernel interval.
+        prepare();
+        timer.start();
+        operation();
+        timer.stop();
+        total_ms += timer.elapsed<double>();
+    }
+    return total_ms / MeasuredRuns;
+}
+
+template <typename Operation>
+double benchmarkCuda(Operation &&operation)
+{
+    return benchmarkCuda([] {}, std::forward<Operation>(operation));
+}
+
+template <typename Operation>
+double benchmarkCpu(Operation &&operation)
+{
+    constexpr int runs = 3;
+    StdTimer<> timer;
+    double total_ms = 0.0;
+    for (int iteration = 0; iteration < runs; ++iteration)
+    {
+        timer.start();
+        operation();
+        timer.stop();
+        total_ms += timer.elapsed<double>();
+    }
+    return total_ms / runs;
+}
+
+BenchmarkRecord makeRecord(
+    std::string method,
+    size_t size,
+    double time_ms,
+    double peak_bandwidth_gbps,
+    bool gpu)
+{
+    // Binary element-wise operation: read A + read B + write output.
+    const double transferred_bytes = 3.0 * size * sizeof(float);
+    const double bandwidth = (transferred_bytes / 1.0e9) / (time_ms / 1000.0);
+    return {
+        std::move(method),
+        size,
+        time_ms,
+        bandwidth,
+        gpu ? bandwidth / peak_bandwidth_gbps * 100.0 : 0.0};
+}
+
+void printRecord(const BenchmarkRecord &record)
+{
+    std::cout << record.method << ": " << record.mean_ms << " ms"
+              << " | BW: " << record.effective_bandwidth_gbps << " GB/s";
+    if (record.method.rfind("GPU", 0) == 0)
+    {
+        std::cout << " | Util: " << record.bandwidth_utilization_pct << '%';
+    }
+    std::cout << '\n';
+}
+
+template <typename T, typename Launch>
+void runGpuCase(
+    const char *name,
+    size_t size,
+    double peak_bandwidth_gbps,
+    BenchmarkLogger &logger,
+    T *device_output,
+    std::vector<T> &host_output,
+    const std::vector<T> &reference,
+    Launch &&launch)
+{
+    const double time_ms = launch();
+    checkCudaErrors(cudaMemcpy(
+        host_output.data(), device_output, size * sizeof(T),
+        cudaMemcpyDeviceToHost));
+    helper::check_difference(
+        const_cast<T *>(reference.data()), host_output.data(), size);
+
+    auto record = makeRecord(name, size, time_ms, peak_bandwidth_gbps, true);
+    printRecord(record);
+    logger.record(std::move(record));
+}
+
+template <typename T, typename Operator>
+void benchmarkGpuImplementations(
+    const std::vector<T> &host_a,
+    const std::vector<T> &host_b,
+    const std::vector<T> &reference,
+    Operator operation,
+    double peak_bandwidth_gbps,
+    BenchmarkLogger &logger)
+{
+    const size_t size = host_a.size();
+    thrust::device_vector<T> input_a(host_a);
+    thrust::device_vector<T> input_b(host_b);
+    thrust::device_vector<T> output(size);
+    std::vector<T> host_output(size);
+
+    T *a = thrust::raw_pointer_cast(input_a.data());
+    T *b = thrust::raw_pointer_cast(input_b.data());
+    T *result = thrust::raw_pointer_cast(output.data());
+
+    // Give every GPU implementation the same output contents and cache state.
+    // This setup is ordered before the start event, so it is not timed.
+    const auto prepare_output = [&]
+    {
+        checkCudaErrors(cudaMemcpyAsync(
+            result, a, size * sizeof(T), cudaMemcpyDeviceToDevice));
+    };
+    const auto measure = [&](auto &&launch)
+    {
+        return benchmarkCuda(
+            prepare_output, std::forward<decltype(launch)>(launch));
+    };
+
+    runGpuCase(
+        "GPU (naive)", size, peak_bandwidth_gbps, logger,
+        result, host_output, reference, [&]
+        { return measure([&]
+                         {
+                element_wise_naive_kernel<<<
+                    (size + BlockDim - 1) / BlockDim, BlockDim>>>(
+                    a, b, result, size, operation);
+                checkCudaErrors(cudaGetLastError()); }); });
+
+    runGpuCase(
+        "GPU (float2)", size, peak_bandwidth_gbps, logger,
+        result, host_output, reference, [&]
+        {
+            const size_t values_per_block = static_cast<size_t>(BlockDim) * 2;
+            return measure([&]
+            {
+                vec2_element_wise_kernel<<<
+                    (size + values_per_block - 1) / values_per_block,
+                    BlockDim>>>(a, b, result, size, operation);
+                checkCudaErrors(cudaGetLastError());
+            }); });
+
+    runGpuCase(
+        "GPU (float4)", size, peak_bandwidth_gbps, logger,
+        result, host_output, reference, [&]
+        {
+            const size_t values_per_block = static_cast<size_t>(BlockDim) * 4;
+            return measure([&]
+            {
+                vec4_element_wise_kernel<<<
+                    (size + values_per_block - 1) / values_per_block,
+                    BlockDim>>>(a, b, result, size, operation);
+                checkCudaErrors(cudaGetLastError());
+            }); });
+
+    runGpuCase(
+        "GPU (Thrust transform)", size, peak_bandwidth_gbps, logger,
+        result, host_output, reference, [&]
+        { return measure([&]
+                         { thrust::transform(
+                               thrust::device,
+                               input_a.begin(), input_a.end(), input_b.begin(),
+                               output.begin(), operation); }); });
+
+    cublasHandle_t handle{};
+    checkCublas(cublasCreate(&handle), "cublasCreate");
+    const T alpha = static_cast<T>(-1);
+    runGpuCase(
+        "GPU (cuBLAS AXPY)", size, peak_bandwidth_gbps, logger,
+        result, host_output, reference, [&]
+        { return measure([&]
+                         {
+                if constexpr (std::is_same_v<T, float>)
+                {
+                    checkCublas(
+                        cublasSaxpy_v2(
+                            handle, static_cast<int>(size), &alpha,
+                            b, 1, result, 1),
+                        "cublasSaxpy_v2");
+                }
+                else
+                {
+                    checkCublas(
+                        cublasDaxpy_v2(
+                            handle, static_cast<int>(size), &alpha,
+                            b, 1, result, 1),
+                        "cublasDaxpy_v2");
+                } }); });
+    checkCublas(cublasDestroy(handle), "cublasDestroy");
+}
+
+int main(int argc, char **argv)
+{
+    const size_t base_size = argc > 1
+                                 ? static_cast<size_t>(std::stoull(argv[1]))
+                                 : DefaultBaseSize;
+    const int case_count = argc > 2 ? std::stoi(argv[2]) : DefaultCaseCount;
+
+    helper::print_device_info();
+    const double peak_bandwidth_gbps = theoreticalPeakBandwidthGBps();
+    std::cout << "Theoretical peak bandwidth: " << peak_bandwidth_gbps
+              << " GB/s\n\n";
+
+    BenchmarkLogger logger;
+    for (int case_index = 1; case_index <= case_count; ++case_index)
+    {
+        using ValueType = float;
+        const size_t size = base_size * case_index;
+        std::cout << "Elements: " << size << '\n';
+
+        auto input_a = helper::generate_sequence<ValueType>(size);
+        auto input_b = helper::generate_sequence<ValueType>(size);
+        std::vector<ValueType> reference(size);
+        std::vector<ValueType> cpu_output(size);
+        const auto operation = std::minus<ValueType>{};
+
+        const auto run_cpu_case = [&](const char *name, auto &&callable)
+        {
+            const double time_ms = benchmarkCpu(
+                std::forward<decltype(callable)>(callable));
+            auto record = makeRecord(
+                name, size, time_ms, peak_bandwidth_gbps, false);
+            printRecord(record);
+            logger.record(std::move(record));
+        };
+
+        run_cpu_case("CPU (raw loop)", [&]
+                     {
+            for (size_t index = 0; index < size; ++index)
+            {
+                reference[index] = operation(input_a[index], input_b[index]);
+            } });
+
+        run_cpu_case("CPU (std::transform)", [&]
+                     { std::transform(
+                           input_a.cbegin(), input_a.cend(), input_b.cbegin(),
+                           cpu_output.begin(), operation); });
+        helper::check_difference(
+            reference.data(), cpu_output.data(), reference.size());
+
+        run_cpu_case("CPU (std::transform par_unseq)", [&]
+                     { std::transform(
+                           std::execution::par_unseq,
+                           input_a.cbegin(), input_a.cend(), input_b.cbegin(),
+                           cpu_output.begin(), operation); });
+        helper::check_difference(
+            reference.data(), cpu_output.data(), reference.size());
+
+        benchmarkGpuImplementations(
+            input_a, input_b, reference, operation,
+            peak_bandwidth_gbps, logger);
+        std::cout << '\n';
+    }
+
+    const auto csv_path = std::filesystem::path(__FILE__).parent_path() / BenchmarkCsv;
+    logger.save(csv_path.string());
+    std::cout << "Saved benchmark data to " << csv_path.string() << '\n';
 }

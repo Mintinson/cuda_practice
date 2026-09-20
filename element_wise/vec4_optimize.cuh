@@ -21,15 +21,20 @@ template <typename T, typename Operator>
 __global__ void vec4_element_wise_kernel(T* d_a, T* d_b, T* d_out, size_t n, Operator op)
 {
     auto idx = (threadIdx.x + blockIdx.x * blockDim.x) * 4;
-    // c[idx] = a[idx] + b[idx];
-    auto reg_a = fetch_vec4(d_a + idx);
-    auto reg_b = fetch_vec4(d_b + idx);
-    decltype(reg_a) reg_out;
-    reg_out.x = op(reg_a.x, reg_b.x);
-    reg_out.y = op(reg_a.y, reg_b.y);
-    reg_out.z = op(reg_a.z, reg_b.z);
-    reg_out.w = op(reg_a.w, reg_b.w);
-    fetch_vec4(d_out + idx) = reg_out;
+    if (idx + 3 < n) {
+        auto reg_a = fetch_vec4(d_a + idx);
+        auto reg_b = fetch_vec4(d_b + idx);
+        std::remove_reference_t<decltype(reg_a)> reg_out;
+        reg_out.x = op(reg_a.x, reg_b.x);
+        reg_out.y = op(reg_a.y, reg_b.y);
+        reg_out.z = op(reg_a.z, reg_b.z);
+        reg_out.w = op(reg_a.w, reg_b.w);
+        fetch_vec4(d_out + idx) = reg_out;
+    } else {
+        for (size_t offset = 0; offset < 4 && idx + offset < n; ++offset) {
+            d_out[idx + offset] = op(d_a[idx + offset], d_b[idx + offset]);
+        }
+    }
 }
 
 #endif // VEC4_OPTIMIZE_H_

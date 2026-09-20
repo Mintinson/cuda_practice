@@ -6,9 +6,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CUDA_STANDARD 17)
 
-
-
 project(cuda_practice VERSION 1.0 LANGUAGES C CXX CUDA)
+
+set(CUDAPRACTICE_ARCH 80 CACHE STRING "CUDA architecture to build for")
+
 if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--allow-unsupported-compiler>")
 endif()
@@ -16,24 +17,36 @@ if(WIN32)
     # add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
     # add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
      add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=/utf-8>")
-
 endif()
 
 
-include(FindCUDAToolkit REQUIRED)
+find_package(CUDAToolkit REQUIRED)
+if (NOT WIN32)
+    find_package(TBB REQUIRED)
+endif()
 
-# find_package(fmt CONFIG REQUIRED)
-# link_libraries(fmt::fmt)
-add_compile_definitions(FMT_UNICODE=0)
 
 include_directories(utils)
-file(GLOB Util utils/*)
-add_executable(demo demo.cu
-    ${Util})
-target_link_libraries(demo PRIVATE CUDA::cudart CUDA::cudart_static)
+# file(GLOB Util utils/*)
+add_executable(demo demo.cu)
 
-# target_include_directories(demo PRIVATE utils)
-# target_link_libraries(demo PRIVATE fmt::fmt)
+
+function(cuda_practice_base target)
+    target_link_libraries(${target} PRIVATE CUDA::cudart)
+    if (NOT WIN32)
+        target_link_libraries(${target} PRIVATE TBB::tbb)
+    endif()
+    set_property(TARGET ${target} PROPERTY CUDA_ARCHITECTURES ${CUDAPRACTICE_ARCH})
+endfunction()
+
+function(cuda_practice_extend target)
+    target_compile_options(${target} PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--expt-relaxed-constexpr>"
+        "$<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--extended-lambda>")
+endfunction()
+
+cuda_practice_base(demo)
+
 add_subdirectory(element_wise)
 add_subdirectory(reduce_demo)
 add_subdirectory(coalesced_demo)
