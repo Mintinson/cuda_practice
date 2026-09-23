@@ -8,17 +8,19 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 
-def load_records(path: Path) -> dict[str, list[tuple[int, float]]]:
-    records: dict[str, list[tuple[int, float]]] = defaultdict(list)
+def load_records(path: Path) -> dict[tuple[str, str], list[tuple[int, float]]]:
+    records: dict[tuple[str, str], list[tuple[int, float]]] = defaultdict(list)
     with path.open("r", encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
-        expected = {"method", "elements", "mean_ms"}
-        if reader.fieldnames is None or set(reader.fieldnames) != expected:
+        expected = {"dtype", "method", "elements", "mean_ms"}
+        columns = set(reader.fieldnames or ())
+        if columns not in (expected, expected - {"dtype"}):
             raise ValueError(
-                f"Expected CSV columns {sorted(expected)}, got {reader.fieldnames}"
+                f"Expected CSV columns {sorted(expected)} (or legacy CSV without dtype), "
+                f"got {reader.fieldnames}"
             )
         for row in reader:
-            records[row["method"]].append(
+            records[(row.get("dtype") or "float32", row["method"])].append(
                 (int(row["elements"]), float(row["mean_ms"]))
             )
 
@@ -27,11 +29,17 @@ def load_records(path: Path) -> dict[str, list[tuple[int, float]]]:
     return dict(records)
 
 
-def draw(records: dict[str, list[tuple[int, float]]], output: Path) -> None:
-    cpu_records = {k: v for k, v in records.items() if k.startswith("CPU")}
-    gpu_records = {k: v for k, v in records.items() if k.startswith("GPU")}
-    panels = [("GPU reductions", gpu_records), ("CPU reductions", cpu_records)]
-    panels = [(title, data) for title, data in panels if data]
+def draw(records: dict[tuple[str, str], list[tuple[int, float]]], output: Path) -> None:
+    panels = []
+    for dtype in ("float32", "int32"):
+        for device in ("GPU", "CPU"):
+            data = {
+                method: values
+                for (record_dtype, method), values in records.items()
+                if record_dtype == dtype and method.startswith(device)
+            }
+            if data:
+                panels.append((f"{dtype} {device} reductions", data))
     if not panels:
         raise ValueError("CSV contains no CPU or GPU benchmark records")
 
@@ -56,14 +64,14 @@ def draw(records: dict[str, list[tuple[int, float]]], output: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Plot reduce_0 benchmark CSV output."
+        description="Plot reduce_bench benchmark CSV output, separated by data type."
     )
     parser.add_argument(
         "csv",
         nargs="?",
         type=Path,
         default=Path("reduce_benchmark.csv"),
-        help="CSV emitted by reduce_0 (default: reduce_benchmark.csv)",
+        help="CSV emitted by reduce_bench (default: reduce_benchmark.csv)",
     )
     parser.add_argument(
         "-o",

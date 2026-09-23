@@ -552,6 +552,23 @@ cub 比 thrust 更加底层（比如要手动管理内存分配），但是其�
         &cub_device_result, d_cub_output, sizeof(T), cudaMemcpyDeviceToHost));
 ```
 
+## 优化 11. Ampere 原生 Warp Reduce
+
+参考 [Warp Reduce 函数 (Ampere)](../优化基础/warp%20相关.md#warp-reduce-函数-ampere)：计算能力 8.0 及以上提供 `__reduce_add_sync(mask, value)`，由参与的 lane 直接得到 warp 内整数和。它只支持 32 位有符号/无符号整数，**不能直接用于 float32**。因此 [reduce_v11.cuh](reduce_v11.cuh) 使用 `int32`，不把它和前面的浮点测试曲线混作同类型性能比较。
+
+每个线程读取至多两个元素，越界时补零；每个完整 warp 用一次 `__reduce_add_sync(0xffffffffu, sum)`。每个 warp 的 lane 0 把结果写入 shared memory，经过一次 `__syncthreads()`，第一个 warp 再调用一次原生归约得到 block 和。多 block 的部分和沿用现有的双缓冲多轮规约接口，最后写入设备端标量。完整 warp 中全部 32 个 lane 都参与指令，包括尾块的补零 lane，避免不匹配的 mask。
+
+公平比较使用同一份 `int32` 输入、相同的每线程双元素加载和相同的多轮规约路径，对比 `reduce_v9` 的 shuffle 版、`reduce_v11` 原生版和 `CUB DeviceReduce::Sum`。三者只计 GPU 规约，不计首次 H2D、工作空间分配和最终 D2H；每种方法都先预热，再使用 `GpuTimer` 记录 20 次均值，并将设备结果与 CPU 的 64 位累加参考值逐一核对。输入值在 `[-3, 3]` 范围内，保证测试规模下无 `int32` 溢出。原生指令减少 warp 内归约指令，不代表完整数组规约一定获得固定倍数加速；读带宽、跨 warp 同步、后续轮次也会影响总时间。
+
+CSV 现在有 `dtype,method,elements,mean_ms` 四列；`plot.py` 将 float32 和 int32、CPU 和 GPU 分面，旧三列 CSV 仍按 float32 读取。可在项目根目录执行：
+
+```powershell
+./out/build/cuda-msvc-release/reduce_demo/reduce_bench.exe
+micromamba run -n new_python python reduce_demo/plot.py reduce_benchmark.csv -o reduce_demo/reduce_benchmark.png
+```
+
+`reduce_bench.exe --warp-smoke` 可快速检查尾块、整块边界及三种 int32 算法的正确性。
+
 ## 扩展
 
 同样的优化手段也适用于内积操作。这里不做过多介绍。
@@ -559,5 +576,7 @@ cub 比 thrust 更加底层（比如要手动管理内存分配），但是其�
 # 测试结果
 
 ![reduce](reduce_benchmark.png)
+
+图中已经加入 int32 的 Ampere / shuffle / CUB 对比。在 RTX 4060 Mobile、约 3881 万至 1.83 亿元素的这次测试中，`reduce_v11` 相对于同类型的 `reduce_v9` shuffle 版约为 **0.98–1.02 倍**，差距很小；这一规模的完整规约主要受显存带宽限制，不能把 warp 级指令的局部收益直接当作整个算子的加速比。
 
 使用的 GPU：RTX4060 Mobile

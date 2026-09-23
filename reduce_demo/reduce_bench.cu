@@ -11,10 +11,12 @@
 #include "reduce_v7.cuh"
 #include "reduce_v9.cuh"
 #include "reduce_v10.cuh"
+#include "reduce_v11.cuh"
 #include "timer.cuh"
 #include <cub/block/block_reduce.cuh>
 #include <cub/device/device_reduce.cuh>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cuda_runtime.h>
 #include <fstream>
@@ -22,6 +24,7 @@
 #include <iostream>
 #include <map>
 #include <numeric>
+#include <stdexcept>
 #include <random_gen.hpp>
 #include <thrust/async/reduce.h>
 #include <thrust/device_vector.h>
@@ -39,7 +42,7 @@ constexpr int BenchmarkMeasuredRuns = 20;
 
 class Logger
 {
-    std::map<std::string, std::map<size_t, std::vector<double>>> records;
+    std::map<std::string, std::map<std::string, std::map<size_t, std::vector<double>>>> records;
     std::string filename;
 
 public:
@@ -47,17 +50,9 @@ public:
         : filename(std::move(name))
     {
     }
-    void record(std::string name, size_t size, double time)
+    void record(const std::string &name, size_t size, double time, const std::string &dtype = "float32")
     {
-        if (records.find(name) == records.end())
-        {
-            records[name] = std::map<size_t, std::vector<double>>();
-        }
-        if (records[name].find(size) == records[name].end())
-        {
-            records[name][size] = std::vector<double>();
-        }
-        records[name][size].push_back(time);
+        records[dtype][name][size].push_back(time);
     }
     void save() const
     {
@@ -67,14 +62,17 @@ public:
             std::cerr << "Failed to open file " << filename << std::endl;
             return;
         }
-        ofs << "method,elements,mean_ms\n";
+        ofs << "dtype,method,elements,mean_ms\n";
         ofs << std::setprecision(10);
-        for (const auto &[name, records] : records)
+        for (const auto &[dtype, methods] : records)
         {
-            for (const auto &[size, times] : records)
+            for (const auto &[name, sizes] : methods)
             {
-                const auto mean = std::accumulate(times.begin(), times.end(), 0.0) / times.size();
-                ofs << std::quoted(name) << ',' << size << ',' << mean << '\n';
+                for (const auto &[size, times] : sizes)
+                {
+                    const auto mean = std::accumulate(times.begin(), times.end(), 0.0) / times.size();
+                    ofs << dtype << ',' << std::quoted(name) << ',' << size << ',' << mean << '\n';
+                }
             }
         }
     }
@@ -164,11 +162,12 @@ __global__ void cub_block_reduce_atomic_kernel(const T *input, size_t size, T *o
     }
 }
 
-void printGpuBenchmark(const char *name, size_t size, double time_ms, float answer)
+template <typename T>
+void printGpuBenchmark(const char *name, size_t size, double time_ms, T answer, const char *dtype = "float32")
 {
-    const double bandwidth = (size * sizeof(float) / 1.0e9) / (time_ms / 1000.0);
+    const double bandwidth = (size * sizeof(T) / 1.0e9) / (time_ms / 1000.0);
     const double utilization = bandwidth / g_peak_bandwidth * 100.0;
-    logger.record(name, size, time_ms);
+    logger.record(name, size, time_ms, dtype);
     std::cout << name << ": " << time_ms << " ms"
               << " | BW: " << bandwidth << " GB/s"
               << " | Util: " << utilization << "%"
@@ -721,10 +720,98 @@ void benchmarkAllGpuReductions(
     benchmarkCudaLibraryReductions(device_input);
 }
 
-int main()
+void benchmarkInt32WarpReductions(size_t size)
+{
+    // A bounded signed input avoids overflow, so the reference and all three
+    // GPU implementations have exactly the same integer result.
+    std::vector<int> host_input(size);
+    for (size_t i = 0; i < size; ++i)
+        host_input[i] = static_cast<int>(i % 7) - 3;
+
+    StdTimer<> cpu_timer;
+    cpu_timer.start();
+    const int64_t reference = std::accumulate(host_input.begin(), host_input.end(), int64_t{0});
+    cpu_timer.stop();
+    if (reference < INT32_MIN || reference > INT32_MAX)
+        throw std::overflow_error("int32 reduction reference does not fit in int32");
+    logger.record("CPU (accumulate loop)", size, cpu_timer.elapsed(), "int32");
+
+    thrust::device_vector<int> device_input(host_input);
+    const int *input = thrust::raw_pointer_cast(device_input.data());
+    const size_t scratch_size = (size + 2 * BlockSize - 1) / (2 * BlockSize);
+    helper::DeviceDataHandler<int> scratch_a(scratch_size);
+    helper::DeviceDataHandler<int> scratch_b(scratch_size);
+    helper::DeviceDataHandler<int> output(1);
+    const auto plus = [] __host__ __device__(int a, int b) { return a + b; };
+
+    const auto run = [&](const char *name, auto &&launch_pass)
+    {
+        const double time_ms = benchmarkCuda([&]
+        {
+            launchMultiPassReduction(
+                input, scratch_a.data, scratch_b.data, output.data, size,
+                2 * BlockSize, true, 0, plus, launch_pass);
+        });
+        int result{};
+        checkCudaErrors(cudaMemcpy(&result, output.data, sizeof(result), cudaMemcpyDeviceToHost));
+        if (result != reference)
+            throw std::runtime_error(std::string(name) + " returned an incorrect int32 sum");
+        printGpuBenchmark(name, size, time_ms, result, "int32");
+    };
+
+    run("GPU (reduce_v9 shuffle)", [&](const int *src, int *dst, size_t count)
+    {
+        reduce_kernel_v9<<<(count + 2 * BlockSize - 1) / (2 * BlockSize), BlockSize>>>(
+            src, dst, count, 0, plus);
+    });
+    run("GPU (reduce_v11 Ampere warp reduce)", [&](const int *src, int *dst, size_t count)
+    {
+        reduce_kernel_v11_ampere<BlockSize><<<(count + 2 * BlockSize - 1) / (2 * BlockSize), BlockSize>>>(
+            src, dst, count);
+    });
+
+    int *d_cub_output{};
+    void *d_temp_storage{};
+    size_t temp_storage_bytes = 0;
+    checkCudaErrors(cudaMalloc(&d_cub_output, sizeof(int)));
+    checkCudaErrors(cub::DeviceReduce::Sum(
+        d_temp_storage, temp_storage_bytes, input, d_cub_output, size));
+    checkCudaErrors(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+    const double cub_ms = benchmarkCuda([&]
+    {
+        checkCudaErrors(cub::DeviceReduce::Sum(
+            d_temp_storage, temp_storage_bytes, input, d_cub_output, size));
+    });
+    int cub_result{};
+    checkCudaErrors(cudaMemcpy(&cub_result, d_cub_output, sizeof(cub_result), cudaMemcpyDeviceToHost));
+    if (cub_result != reference)
+        throw std::runtime_error("CUB DeviceReduce returned an incorrect int32 sum");
+    printGpuBenchmark("GPU (CUB DeviceReduce)", size, cub_ms, cub_result, "int32");
+    checkCudaErrors(cudaFree(d_temp_storage));
+    checkCudaErrors(cudaFree(d_cub_output));
+}
+
+int main(int argc, char **argv)
 {
     g_peak_bandwidth = getTheoreticalPeakBandwidth();
     std::cout << "GPU Theoretical Peak Bandwidth: " << g_peak_bandwidth << " GB/s\n\n";
+
+    int device = 0;
+    cudaDeviceProp properties{};
+    checkCudaErrors(cudaGetDevice(&device));
+    checkCudaErrors(cudaGetDeviceProperties(&properties, device));
+    if (properties.major < 8)
+    {
+        std::cerr << "Ampere warp reduction requires compute capability 8.0 or newer\n";
+        return 1;
+    }
+    if (argc == 2 && std::string(argv[1]) == "--warp-smoke")
+    {
+        for (const size_t size : {size_t{1023}, size_t{1024}, size_t{1025}, size_t{2049}})
+            benchmarkInt32WarpReductions(size);
+        logger.save();
+        return 0;
+    }
 
     for (int i = 1; i < 5 + 1; ++i)
     {
@@ -732,6 +819,7 @@ int main()
         for (int k = 0; k < 1; ++k)
         {
             std::cout << "Reduce with elements : " << size << "\n";
+            {
             auto randomVec = helper::generate_sequence<float>(size);
             using ValueType = decltype(randomVec)::value_type;
 
@@ -765,6 +853,8 @@ int main()
 
             benchmarkAllGpuReductions(
                 randomVec, static_cast<ValueType>(0), op);
+            }
+            benchmarkInt32WarpReductions(size);
             std::cout << "\n";
         }
     }
