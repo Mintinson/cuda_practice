@@ -232,7 +232,7 @@ namespace helper
                 // 乘以 2 是因为 GDDR 显存在时钟的上升沿和下降沿都传输数据 (Double Data Rate)
                 // 除以 8 将 bits 转换为 bytes
                 // 除以 1.0e6 将 kHz 转换为 GHz (等价于 10^9 转换 Bytes 为 GB)
-                double peakBandwidth = 2.0 * deviceProp.memoryClockRate * (deviceProp.memoryBusWidth / 8) / 1.0e6;
+                double peakBandwidth = 2.0 * deviceProp.memoryClockRate * (deviceProp.memoryBusWidth / 8.0) / 1.0e6;
                 printf("    Device Memory Clock Rate (KHz): %d\n", deviceProp.memoryClockRate);
                 printf("    Device Memory Bus Width (bits): %d\n", deviceProp.memoryBusWidth);
                 printf("    Device Peak Memory Bandwidth (GB/s): %.2f\n", peakBandwidth);

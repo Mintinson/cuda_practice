@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cuda_runtime.h>
 #include <limits>
+#include "softmax_helper.cuh"
 #include "softmax_v4.cuh"
 
 namespace cudda
@@ -21,50 +22,35 @@ namespace cudda
     template <typename T>
     __global__ void softmax_v5_kernel(T *__restrict__ matd, T *__restrict__ resd, int M, int N)
     {
-        int bx = blockDim.x;
-
-        // ty equals TILE_SIZE
-        int ty = threadIdx.y;
-        int tx = threadIdx.x;
-
-        // result matrix's row
-        int row = (bx * TILE_SIZE + ty);
+        const int ty = threadIdx.y;
+        const int tx = threadIdx.x;
+        const int row = blockIdx.x * TILE_SIZE + ty;
         if (row >= M)
             return;
 
-        // one for each row
-        T local_maxs[TILE_SIZE] = {std::numeric_limits<T>::min()};
-        T local_norms[TILE_SIZE] = {0.f};
-        T x[TILE_SIZE] = {0.f};
+        T local_max = std::numeric_limits<T>::lowest();
+        T local_norm = 0.f;
 
-        for (int i = tx; i < N; i += bx)
+        for (int i = tx; i < N; i += blockDim.x)
         {
-#pragma unroll
-            for (int j = 0; j < TILE_SIZE; j++)
+            const T x = matd[row * N + i];
+            if (x > local_max)
             {
-                x[j] = matd[row * N + i];
-                if (x[j] > local_maxs[j])
-                {
-                    local_norms[j] *= expf(local_maxs[j] - x[j]);
-                    local_maxs[j] = x[j];
-                }
-                local_norms[j] += expf(x[j] - local_maxs[j]);
+                local_norm *= exp_op(local_max - x);
+                local_max = x;
             }
-        }
-        __syncthreads();
-
-        for (int tile = 0; tile < TILE_SIZE; tile++)
-        {
-            T lm = local_maxs[tile];
-            local_maxs[tile] = warpReduceMax(lm);
-            local_norms[tile] *= expf(lm - local_maxs[tile]);
-            local_norms[tile] = warpReduceSum(local_norms[tile]);
+            local_norm += exp_op(x - local_max);
         }
 
-        // finally, compute softmax
-        for (int i = tx; i < N; i += bx)
-            for (int tile = 0; tile < TILE_SIZE; tile++)
-                resd[row * N + i] = expf(matd[row * N + i] - local_maxs[tile]) / local_norms[tile];
+        const T thread_max = local_max;
+        local_max = warpReduceMax(local_max);
+        const T row_max = __shfl_sync(0xffffffffu, local_max, 0);
+        local_norm *= exp_op(thread_max - row_max);
+        local_norm = warpReduceSum(local_norm);
+        const T row_norm = __shfl_sync(0xffffffffu, local_norm, 0);
+
+        for (int i = tx; i < N; i += blockDim.x)
+            resd[row * N + i] = exp_op(matd[row * N + i] - row_max) / row_norm;
     }
 } // namespace cudda
 

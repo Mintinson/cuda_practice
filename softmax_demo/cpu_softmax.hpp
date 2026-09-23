@@ -39,7 +39,6 @@ void softmax_naive(const T *a, T *c, int m, int n)
     }
 }
 
-
 template <typename T>
 void softmax_combine_row(const T *a, T *c, int n)
 {
@@ -59,7 +58,7 @@ void softmax_combine_row(const T *a, T *c, int n)
     }
     for (int i = 0; i < n; i++)
     {
-        c[i] = expf(a[i] - max_val) / sum;
+        c[i] = std::exp(a[i] - max_val) / sum;
     }
 }
 
@@ -79,24 +78,24 @@ void softmax_threads(const T *a, T *c, int m, int n)
     }
 }
 template <typename T>
-void softmax_concurrence(const T *a, T *c, int m, int n)
+void softmax_concurrence(const std::vector<std::size_t> &indices, const T *a, T *c, int m, int n)
 {
-    std::vector<int> a_rows(m);
-    std::iota(a_rows.begin(), a_rows.end(), 0);
+    // std::vector<int> a_rows(m);
+    // std::iota(a_rows.begin(), a_rows.end(), 0);
     std::for_each(
-        std::execution::par,
-        a_rows.begin(), a_rows.end(), [a, c, n](int i)
+        std::execution::par_unseq,
+        indices.begin(), indices.end(), [a, c, n](std::size_t i)
         { softmax_naive_row<T>(a + i * n, c + i * n, n); });
 }
 
 template <typename T>
-void softmax_combine_concurrence(const T *a, T *c, int m, int n)
+void softmax_combine_concurrence(const std::vector<std::size_t> &indices, const T *a, T *c, int m, int n)
 {
-    std::vector<int> a_rows(m);
-    std::iota(a_rows.begin(), a_rows.end(), 0);
+    // std::vector<int> a_rows(m);
+    // std::iota(a_rows.begin(), a_rows.end(), 0);
     std::for_each(
-        std::execution::par,
-        a_rows.begin(), a_rows.end(), [a, c, n](int i)
+        std::execution::par_unseq,
+        indices.begin(), indices.end(), [a, c, n](std::size_t i)
         { softmax_combine_row<T>(a + i * n, c + i * n, n); });
 }
 

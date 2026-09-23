@@ -1,7 +1,4 @@
-add_executable(softmax_demo softmax_main.cu)
-target_link_libraries(softmax_demo PRIVATE CUDA::cudart CUDA::cudart)
-    target_compile_options(softmax_demo PRIVATE
-            "--expt-relaxed-constexpr"
-            "--extended-lambda"
-            -lineinfo
-    )
+add_executable(softmax_bench softmax_main.cu)
+
+cuda_practice_base(softmax_bench)
+cuda_practice_extend(softmax_bench)

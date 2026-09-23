@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cuda_runtime.h>
 
+#include "softmax_helper.cuh"
+
 namespace cudda
 {
 /*
@@ -17,7 +19,7 @@ __global__ void softmax_v1_kernel(T* __restrict__ matd, T* __restrict__ resd, in
     int row = blockDim.x * blockIdx.x + threadIdx.x;
 
     if (row < M) {
-        T m = std::numeric_limits<T>::min();
+        T m = -std::numeric_limits<T>::infinity();
         T L = {};
 
         // compute max and norm factor in one pass only
@@ -26,14 +28,14 @@ __global__ void softmax_v1_kernel(T* __restrict__ matd, T* __restrict__ resd, in
             int i = row * N + col;
             T curr = matd[i];
             if (curr > m) {
-                L = L * expf(m - curr);
+                L = L * exp_op(m - curr);
                 m = curr;
             }
             L += expf(curr - m);
         }
         for (int col = 0; col < N; col++) {
             int i = row * N + col;
-            resd[i] = expf(matd[i] - m) / L;
+            resd[i] = exp_op(matd[i] - m) / L;
         }
     }
 }

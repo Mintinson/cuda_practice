@@ -45,6 +45,13 @@ function(cuda_practice_extend target)
         "$<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--extended-lambda>")
 endfunction()
 
+function(cuda_practice_profile target)
+    target_compile_options(${target} PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:-lineinfo>"
+    )
+endfunction()
+
+
 cuda_practice_base(demo)
 
 add_subdirectory(element_wise)

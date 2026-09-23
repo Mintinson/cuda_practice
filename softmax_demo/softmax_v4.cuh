@@ -97,7 +97,7 @@ namespace cudda
     __device__ constexpr auto *fetch_vec4_ptr(T *ptr)
     {
         using DecayType = std::remove_cv_t<std::remove_reference_t<T>>;
-        if constexpr (std::is_same_v<DecayType, T>)
+        if constexpr (std::is_same_v<DecayType, float>)
         {
             return reinterpret_cast<float4 *>((ptr));
         }
@@ -125,7 +125,7 @@ namespace cudda
     template <typename T>
     __global__ void softmax_v4_kernel(T *__restrict__ matd, T *__restrict__ resd, int M, int N)
     {
-        // max and norm reduction will happen in shared memory (static)
+        // max and norm reduction will happen in shared memory
         extern __shared__ T smem[];
 
         int row = blockIdx.x;
@@ -135,7 +135,7 @@ namespace cudda
 
         T *input_row = matd + row * N;
         T *output_row = resd + row * N;
-        T local_max = std::numeric_limits<T>::min();
+        T local_max = std::numeric_limits<T>::lowest();
         T local_norm = 0.0f;
 
         // cast as float4
@@ -143,12 +143,12 @@ namespace cudda
         int tail = N % 4;
         auto *input_row_vec = fetch_vec4_ptr(input_row);
         auto *output_row_vec = fetch_vec4_ptr(output_row);
-        T maxval = std::numeric_limits<T>::min();
+        T maxval = std::numeric_limits<T>::lowest();
 
 #pragma unroll
         for (int i = tid; i < n_float4s; i += blockDim.x)
         {
-            float4 elem = input_row_vec[i];
+            auto elem = input_row_vec[i];
 
             maxval = fmaxf(maxval, elem.x);
             maxval = fmaxf(maxval, elem.y);
@@ -176,14 +176,14 @@ namespace cudda
             }
             local_norm += __expf(val - local_max);
         }
-        __syncthreads();
+        // __syncthreads();
 
         // warp level reduction using XOR shuffle ('exchanges' the values in the threads)
         // note: if there are 256 threads in one block (8 warps of 32 threads each)
         // the following for loop reduces the value in all the 8 warps
         // the 8 warps contain the 8 maximum values of the 32 threads that reside in those warps
         // T val = smem[tid];
-        blockReduceMax<T>(local_max, smem, std::numeric_limits<T>::min());
+        blockReduceMax<T>(local_max, smem, std::numeric_limits<T>::lowest());
         __syncthreads();
 
         // we got the global row max now
@@ -199,7 +199,7 @@ namespace cudda
         __syncthreads();
 
         T row_norm = smem[0];
-        __syncthreads();
+        // __syncthreads();
 
 // finally, compute softmax
 #pragma unroll
