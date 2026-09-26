@@ -148,7 +148,7 @@ double benchmarkCPUFunction(Launch &&launch)
 }
 
 template <typename T>
-void validateSoftmax(
+void validateMatrix(
     const char *method,
     const std::vector<T> &reference,
     const std::vector<T> &actual,
@@ -197,7 +197,7 @@ void runGpuBenchmark(
 
     // D2H happens once after timing. H2D and allocations happen before timing.
     device_output.cpyToHost(host_output.data());
-    validateSoftmax(method, reference, host_output, tolerance);
+    validateMatrix(method, reference, host_output, tolerance);
 
     const size_t elements = rows * cols;
     // Common lower-bound traffic: one input read plus one output write.
@@ -226,7 +226,7 @@ void runCPUBenchmark(
 {
     const double mean_ms = benchmarkCPUFunction(std::forward<Launch>(launch));
 
-    validateSoftmax(method, reference, output, tolerance);
+    validateMatrix(method, reference, output, tolerance);
 
     logger.record({method, rows, cols, mean_ms});
     std::cout << std::left << std::setw(28) << method

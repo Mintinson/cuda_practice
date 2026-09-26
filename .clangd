@@ -1,0 +1,11 @@
+CompileFlags:
+  Add: 
+    - "-I/usr/local/cuda-12.9/include"  # 替换为你实际安装的 CUDA 版本路径
+    - "--cuda-path=/usr/local/cuda-12.9"
+    - "-std=c++17"                      # 根据你的项目要求修改
+    - "-xcuda"                          # 强制按 CUDA C++ 解析文件
+  Remove: 
+    - "-forward-unknown-to-host-compiler" # 移除 nvcc 特有的，clang 不认识的 flag
+    - "--generate-code*"
+    - "--expt-relaxed-constexpr"
+    - "--extended-lambda"

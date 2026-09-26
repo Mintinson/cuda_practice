@@ -109,11 +109,11 @@ namespace helper
             checkCudaErrors(cudaMemset(data, init, n * sizeof(T)));
         }
 
-        DeviceDataHandler(const T *src, std::size_t n, std::size_t start = 0, bool host = true)
+        DeviceDataHandler(const T *src, std::size_t n, std::size_t start = 0, bool fromHost = true)
             : size(n)
         {
             checkCudaErrors(cudaMalloc(&data, n * sizeof(T)));
-            if (host)
+            if (fromHost)
             {
                 checkCudaErrors(cudaMemcpy(data + start, src, (n - start) * sizeof(T),
                                            cudaMemcpyHostToDevice));
