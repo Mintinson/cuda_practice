@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CUDA GEMM Thread 级 Tiling（寄存器中转）- Interactive</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(1100px 540px at 6% -8%, rgba(124,58,237,.10), transparent 62%),
+        radial-gradient(900px 480px at 98% 2%, rgba(59,130,246,.09), transparent 60%),
+        radial-gradient(900px 560px at 50% 108%, rgba(225,29,72,.07), transparent 62%),
+        #f7f9fc;
+      color: #0f172a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      background: rgba(255,255,255,.92);
+      border: 1px solid rgba(226,232,240,.95);
+      border-radius: 22px;
+      box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 16px 36px -16px rgba(15,23,42,.16);
+      backdrop-filter: blur(8px);
+      transition: box-shadow .25s ease, transform .25s ease;
+    }
+    .card:hover { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 22px 46px -18px rgba(15,23,42,.22); }
+    .soft-card {
+      border-radius: 18px;
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 1px 2px rgba(15,23,42,.04);
+      transition: box-shadow .2s ease, transform .2s ease;
+    }
+    .soft-card:hover { box-shadow: 0 8px 22px -12px rgba(15,23,42,.28); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .flow-line { stroke-dasharray: 9 8; animation: dash 1.0s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -34; } }
+    .pulse-soft { animation: pulseSoft 1.1s ease-in-out infinite; }
+    @keyframes pulseSoft {
+      0%,100% { opacity: .45; filter: drop-shadow(0 0 0 rgba(59,130,246,0)); }
+      50% { opacity: 1; filter: drop-shadow(0 0 8px rgba(59,130,246,.35)); }
+    }
+    .compute-glow { animation: computeGlow .9s ease-in-out infinite; }
+    @keyframes computeGlow {
+      0%,100% { filter: drop-shadow(0 0 0 rgba(244,63,94,0)); }
+      50% { filter: drop-shadow(0 0 11px rgba(244,63,94,.55)); }
+    }
+    .num-badge {
+      width: 2.15rem; height: 2.15rem;
+      border-radius: .85rem;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-weight: 900; color: #fff; font-size: .95rem;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      box-shadow: 0 8px 16px -8px rgba(37,99,235,.9);
+      flex: none;
+    }
+    .glass-bar {
+      background: rgba(255,255,255,.82);
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 10px 30px -18px rgba(15,23,42,.35);
+      backdrop-filter: blur(14px);
+    }
+    .btn {
+      border-radius: 12px; font-weight: 700; font-size: .875rem;
+      padding: .5rem .95rem;
+      transition: all .18s ease;
+      box-shadow: 0 1px 2px rgba(15,23,42,.06);
+    }
+    .btn-ghost { background: #fff; border: 1px solid #e2e8f0; color: #334155; }
+    .btn-ghost:hover { background: #f8fafc; border-color: #cbd5e1; transform: translateY(-1px); }
+    .btn-dark { background: #0f172a; color: #fff; border: 1px solid #0f172a; }
+    .btn-dark:hover { transform: translateY(-1px); box-shadow: 0 8px 18px -10px rgba(15,23,42,.9); }
+    .btn-blue { background: linear-gradient(135deg,#2563eb,#3b82f6); color: #fff; border: 1px solid #2563eb; }
+    .btn-blue:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -10px rgba(37,99,235,.9); }
+    .chip {
+      border-radius: 12px; font-size: .72rem; font-weight: 800;
+      padding: .4rem .7rem; border: 1px solid #e2e8f0; background: #fff; color: #64748b;
+      transition: all .18s ease; white-space: nowrap;
+    }
+    .chip:hover { border-color: #93c5fd; color: #1d4ed8; }
+    .chip-done { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    .chip-now {
+      background: linear-gradient(135deg,#2563eb,#3b82f6);
+      border-color: #2563eb; color: #fff;
+      box-shadow: 0 8px 16px -8px rgba(37,99,235,.9);
+    }
+    input[type="range"] { height: 1.25rem; }
+    .scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 3px solid rgba(59,130,246,.25);
+      outline-offset: 2px;
+    }
+    .hairline { height: 1px; background: linear-gradient(to right, transparent, #e2e8f0 20%, #e2e8f0 80%, transparent); }
+    svg text { user-select: none; }
+    .bar-track { height: 14px; border-radius: 999px; background: #f1f5f9; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 999px; transition: width .45s cubic-bezier(.22,1,.36,1); }
+  </style>
+</head>
+
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useEffect, useMemo, useRef, useState } = React;
+
+// -----------------------------------------------------------------
+// 与 matmul_reg.cuh 一致的编译期常量
+//   BLOCK_M=BLOCK_N=128, BLOCK_K=8, THREAD_TILE_M=N=8
+//   THREADS = (128/8)*(128/8) = 256, 线程网格 16 × 16
+// -----------------------------------------------------------------
+const BM = 128, BN = 128, BK = 8, TM = 8, TN = 8;
+const THREADS = 256, THREAD_COLS = 16;
+
+// 演示用的确定性矩阵取值（小整数，便于手算核对）
+const AVAL = (r, c) => ((r * 7 + c * 3) % 9) + 1;
+const BVAL = (r, c) => ((r * 5 + c * 2) % 9) + 1;
+const fmt = (n) => n.toLocaleString("en-US");
+
+const COLORS = {
+  A: "#2563eb", B: "#059669", C: "#ea580c", R: "#e11d48", P: "#7c3aed", G: "#475569",
+};
+
+function MatrixGrid({x, y, w, h, rows=8, cols=8, stroke="#cbd5e1", opacity=.65}) {
+  const lines = [];
+  for (let i = 1; i < cols; i++) {
+    const xx = x + (w * i / cols);
+    lines.push(<line key={"v"+i} x1={xx} x2={xx} y1={y} y2={y+h} stroke={stroke} opacity={opacity} strokeWidth="0.8"/>);
+  }
+  for (let i = 1; i < rows; i++) {
+    const yy = y + (h * i / rows);
+    lines.push(<line key={"h"+i} x1={x} x2={x+w} y1={yy} y2={yy} stroke={stroke} opacity={opacity} strokeWidth="0.8"/>);
+  }
+  return <>{lines}</>;
+}
+
+function ArrowMarker() {
+  return (
+    <defs>
+      <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill={COLORS.A}/>
+      </marker>
+      <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill={COLORS.B}/>
+      </marker>
+      <marker id="arrowRose" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill={COLORS.R}/>
+      </marker>
+      <marker id="arrowSlate" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill={COLORS.G}/>
+      </marker>
+      <marker id="arrowViolet" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill={COLORS.P}/>
+      </marker>
+    </defs>
+  )
+}
+
+function Pill({children, color="slate"}) {
+  const styles = {
+    blue:"bg-blue-50 text-blue-700 border-blue-200",
+    green:"bg-emerald-50 text-emerald-700 border-emerald-200",
+    orange:"bg-orange-50 text-orange-700 border-orange-200",
+    rose:"bg-rose-50 text-rose-700 border-rose-200",
+    purple:"bg-violet-50 text-violet-700 border-violet-200",
+    slate:"bg-slate-50 text-slate-600 border-slate-200",
+  };
+  return <span className={"inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-semibold tracking-tight "+styles[color]}>{children}</span>
+}
+
+function ProgressBar({value, color="bg-violet-500"}) {
+  return (
+    <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+      <div className={"h-full rounded-full transition-all duration-300 "+color} style={{width:`${Math.max(0,Math.min(100,value))}%`}} />
+    </div>
+  )
+}
+
+function SecTitle({n, title, children, right}) {
+  return (
+    <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4 mb-5">
+      <div className="flex items-start gap-3">
+        <div className="num-badge">{n}</div>
+        <div>
+          <h2 className="text-xl sm:text-[1.4rem] font-black tracking-tight text-slate-900 leading-snug">{title}</h2>
+          {children ? <p className="text-sm text-slate-500 mt-1.5 leading-6 max-w-3xl">{children}</p> : null}
+        </div>
+      </div>
+      {right ? <div className="flex flex-wrap items-center gap-2">{right}</div> : null}
+    </div>
+  )
+}
+
+function KTimeline({tiles, kIndex, setKIndex}) {
+  return (
+    <div className="overflow-x-auto scrollbar-thin pb-1">
+      <div className="flex min-w-max gap-2">
+        {Array.from({length:tiles}).map((_,i)=>(
+          <button key={i} onClick={()=>setKIndex(i)}
+            className={`chip ${i===kIndex ? "chip-now" : i<kIndex ? "chip-done" : ""}`}>
+            k={i*8}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function PhaseBadge({phase, kk, sub}) {
+  const subName = ["载入 reg_A", "载入 reg_B", "64 次 FMA"][sub] || "";
+  const phases = [
+    {name:"协作加载", detail:"Global → Shared（与 block tiling 完全相同）", color:"blue"},
+    {name:"同步屏障", detail:"__syncthreads()", color:"purple"},
+    {name:"寄存器外积", detail:`kk = ${kk} · ${subName}`, color:"rose"},
+    {name:"推进 / 写回", detail:"进入下一 K tile；全部 K 完成后写回 C", color:"orange"},
+  ];
+  const p = phases[phase];
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+      <Pill color={p.color}>{p.name}</Pill>
+      <span className="text-sm text-slate-600">{p.detail}</span>
+    </div>
+  )
+}
+
+// =================================================================
+// Section 1：三级存储链路总览
+// =================================================================
+function OverviewChain({phase, sub, kIndex, tiles, playing, accumulation}) {
+  const load = phase === 0;
+  const lds  = phase === 2 && sub < 2;
+  const fma  = phase === 2 && sub === 2;
+  const adv  = phase === 3;
+  return (
+    <svg viewBox="0 0 980 372" className="w-full">
+      <ArrowMarker/>
+      <text x="20" y="26" fontSize="15" fontWeight="800" fill="#0f172a">三级数据搬运链：每一级都在“当前存储层级”上最大化复用</text>
+      <text x="20" y="46" fontSize="12" fill="#64748b">当前 k = {kIndex*8}，共 {tiles} 个 K tile，本线程每 kk 读 16 个 float、做 64 次 FMA</text>
+
+      {/* Global */}
+      <g>
+        <rect x="16" y="66" width="196" height="228" rx="16" fill="#eff6ff" stroke="#bfdbfe"/>
+        <text x="114" y="92" textAnchor="middle" fontSize="14" fontWeight="800" fill="#1e3a8a">Global Memory</text>
+        <rect x="36" y="106" width="64" height="160" rx="8" fill="#dbeafe" stroke="#60a5fa"
+              opacity={load?1:.6} className={load&&playing?"pulse-soft":""}/>
+        <text x="68" y="192" textAnchor="middle" fontSize="11" fontWeight="700" fill="#1d4ed8">A</text>
+        <text x="68" y="208" textAnchor="middle" fontSize="10" fill="#475569">128×8</text>
+        <rect x="118" y="106" width="76" height="48" rx="8" fill="#d1fae5" stroke="#34d399"
+              opacity={load?1:.6} className={load&&playing?"pulse-soft":""}/>
+        <text x="156" y="128" textAnchor="middle" fontSize="11" fontWeight="700" fill="#047857">B</text>
+        <text x="156" y="143" textAnchor="middle" fontSize="10" fill="#475569">8×128</text>
+        <text x="114" y="280" textAnchor="middle" fontSize="10.5" fill="#475569">每 K tile 每 block：8 KB</text>
+      </g>
+
+      <path d="M216 180 C240 180 252 180 276 180" fill="none" stroke={COLORS.A} strokeWidth="3"
+            markerEnd="url(#arrowBlue)" className={load&&playing?"flow-line":""} opacity={load?1:.35}/>
+      <text x="246" y="166" textAnchor="middle" fontSize="10" fill="#1d4ed8">协作加载</text>
+
+      {/* Shared */}
+      <g>
+        <rect x="280" y="66" width="200" height="228" rx="16" fill="#f0fdf4" stroke="#bbf7d0"/>
+        <text x="380" y="92" textAnchor="middle" fontSize="14" fontWeight="800" fill="#14532d">Shared Memory</text>
+        <rect x="300" y="102" width="70" height="118" rx="8" fill="#dbeafe" stroke="#3b82f6"
+              opacity={load||lds||fma?1:.5}/>
+        <text x="335" y="158" textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#1d4ed8">smem_A</text>
+        <text x="335" y="173" textAnchor="middle" fontSize="9.5" fill="#475569">[128][8]</text>
+        <rect x="300" y="232" width="160" height="44" rx="8" fill="#d1fae5" stroke="#10b981"
+              opacity={load||lds||fma?1:.5}/>
+        <text x="380" y="251" textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#047857">smem_B [8][128]</text>
+        <text x="380" y="266" textAnchor="middle" fontSize="9.5" fill="#475569">block 内所有线程复用</text>
+      </g>
+
+      <path d="M484 180 C508 180 520 180 544 180" fill="none" stroke={COLORS.P} strokeWidth="3"
+            markerEnd="url(#arrowViolet)" className={lds&&playing?"flow-line":""} opacity={lds?1:.35}/>
+      <text x="514" y="158" textAnchor="middle" fontSize="10" fill="#6d28d9">LDS（本篇核心）</text>
+      <text x="514" y="200" textAnchor="middle" fontSize="8.5" fill="#64748b">16 float / kk</text>
+
+      {/* Registers */}
+      <g>
+        <rect x="548" y="66" width="216" height="228" rx="16" fill="#fff1f2" stroke="#fecdd3"/>
+        <text x="656" y="92" textAnchor="middle" fontSize="14" fontWeight="800" fill="#881337">Registers（每线程私有）</text>
+        <rect x="568" y="104" width="34" height="112" rx="6" fill="#ffe4e6" stroke="#fb7185"
+              opacity={lds?1:.55} className={lds&&playing?"pulse-soft":""}/>
+        <text x="585" y="164" textAnchor="middle" fontSize="9" fontWeight="700" fill="#be123c">reg_A</text>
+        <rect x="568" y="228" width="120" height="26" rx="6" fill="#d1fae5" stroke="#34d399"
+              opacity={lds?1:.55} className={lds&&playing?"pulse-soft":""}/>
+        <text x="628" y="245" textAnchor="middle" fontSize="9" fontWeight="700" fill="#047857">reg_B[8]</text>
+        <rect x="622" y="104" width="120" height="112" rx="8" fill="#fff" stroke="#fb7185"
+              opacity={fma?1:.6} className={fma&&playing?"compute-glow":""}/>
+        <MatrixGrid x={622} y={104} w={120} h={112} rows={8} cols={8} stroke="#fecdd3"/>
+        <text x="682" y="164" textAnchor="middle" fontSize="10" fontWeight="800" fill="#be123c">accum[8][8]</text>
+        <text x="656" y="280" textAnchor="middle" fontSize="10.5" fill="#9f1239">reg_A + reg_B + accum = 80 寄存器</text>
+      </g>
+
+      <path d="M768 180 C792 180 804 180 826 180" fill="none" stroke={COLORS.C} strokeWidth="3"
+            markerEnd="url(#arrowSlate)" className={adv&&playing?"flow-line":""} opacity={adv?1:.35}/>
+      <text x="797" y="158" textAnchor="middle" fontSize="10" fill="#9a3412">写回</text>
+      <text x="797" y="200" textAnchor="middle" fontSize="9.5" fill="#64748b">K 循环结束后</text>
+
+      {/* C */}
+      <g>
+        <rect x="830" y="66" width="134" height="228" rx="16" fill="#fff7ed" stroke="#fed7aa"/>
+        <text x="897" y="92" textAnchor="middle" fontSize="14" fontWeight="800" fill="#7c2d12">C tile</text>
+        <rect x="854" y="112" width="86" height="86" rx="10" fill="#ffedd5" stroke="#f97316" opacity={adv?1:.6}/>
+        <MatrixGrid x={854} y={112} w={86} h={86} rows={8} cols={8} stroke="#fdba74"/>
+        <text x="897" y="222" textAnchor="middle" fontSize="10.5" fill="#9a3412">128 × 128</text>
+        <text x="897" y="240" textAnchor="middle" fontSize="10" fill="#9a3412">每线程连续 8×8</text>
+      </g>
+
+      {/* bottom banner */}
+      <rect x="150" y="312" width="680" height="44" rx="14" fill="#faf5ff" stroke="#ddd6fe"/>
+      <text x="490" y="339" textAnchor="middle" fontSize="12.5" fontWeight="700" fill="#6d28d9">
+        {load ? "① 256 线程协作加载 smem_A / smem_B（与 block tiling 相同，本篇不展开）"
+            : phase===1 ? "② __syncthreads()：等待 smem 就绪"
+            : phase===2 ? (sub===0 ? `③a 本线程把 smem_A 的第 ${kIndex*8}+kk 列装进 reg_A[8]：8 次 LDS`
+                        : sub===1 ? `③b 把 smem_B 的第 kk 行装进 reg_B[8]：8 次 LDS`
+                        : `③c reg_A ⊗ reg_B 外积：64 次 FMA，全程 0 次 smem 访问`)
+            : "④ 本 K tile 完成，推进到下一个 k"}
+      </text>
+    </svg>
+  );
+}
+
+// =================================================================
+// Section 2：核心对比 —— 谁在访问共享内存
+// =================================================================
+function ComparePanel() {
+  const [mode, setMode] = useState(1); // 0 = block tiling 直读, 1 = thread tiling 寄存器中转
+  const ldsPerKk = mode === 0 ? 72 : 16;
+  const ldsPerThreadTile = mode === 0 ? 576 : 128;
+  const ldsPerBlockTile = ldsPerThreadTile * 256;
+
+  const pipeBoxes = useMemo(() => {
+    // 一个 kk 内的指令序列（示意）
+    if (mode === 0) {
+      const boxes = [{t:"A", n:1}];
+      for (let i = 0; i < 8; i++) { boxes.push({t:"B", n:1}); boxes.push({t:"F", n:8}); }
+      return boxes;
+    }
+    return [{t:"A", n:8}, {t:"B", n:8}, {t:"F", n:64}];
+  }, [mode]);
+
+  const boxColor = { A:"#3b82f6", B:"#10b981", F:"#f43f5e" };
+  const boxLabel = { A:"LDS A", B:"LDS B", F:"FMA" };
+  let acc = 0;
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        <button onClick={()=>setMode(0)}
+          className={`btn ${mode===0?"btn-dark":"btn-ghost"}`}>Block Tiling：边读边算</button>
+        <button onClick={()=>setMode(1)}
+          className={`btn ${mode===1?"btn-dark":"btn-ghost"}`}>Thread Tiling：先装寄存器再算</button>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <div className="soft-card bg-white p-4">
+          <div className="text-sm font-extrabold text-slate-900">单线程 · 单个 kk 的访存 / 计算构成</div>
+          <div className="mt-3 space-y-3">
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="font-bold text-blue-700">共享内存读取（LDS）</span>
+                <span className="mono font-bold">{ldsPerKk} 次</span>
+              </div>
+              <div className="bar-track">
+                <div className="bar-fill" style={{width:`${(ldsPerKk/72)*100}%`, background: mode===0?"#64748b":"#7c3aed"}}/>
+              </div>
+            </div>
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="font-bold text-rose-600">FMA</span>
+                <span className="mono font-bold">64 次（不变）</span>
+              </div>
+              <div className="bar-track">
+                <div className="bar-fill bg-rose-500" style={{width:"100%"}}/>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 rounded-xl bg-slate-50 border px-3 py-2.5 text-xs leading-6 text-slate-600">
+            {mode === 0
+              ? <>smem_B 的 <span className="mono font-bold">64</span> 次读取里只有 8 个不同地址 —— 同一行被 8 个 i 轮重复读。每个 FMA 都依赖一次 LDS，warp 频繁在 MIO 流水线上排队（MIO Throttle Stall）。</>
+              : <>16 次 LDS 服务 64 次 FMA：读比从 <span className="font-bold">72 → 16</span>，且 FMA 段完全脱离 smem 依赖链。</>}
+          </div>
+        </div>
+
+        <div className="soft-card bg-white p-4">
+          <div className="text-sm font-extrabold text-slate-900">每线程 · 每个 K tile 的 smem 读取次数</div>
+          <table className="w-full mt-3 text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500 border-b">
+                <th className="py-2">访问对象</th>
+                <th className="py-2 text-right">Block Tiling</th>
+                <th className="py-2 text-right">Thread Tiling</th>
+              </tr>
+            </thead>
+            <tbody className="mono">
+              <tr className="border-b border-slate-100">
+                <td className="py-2 font-sans">smem_A</td>
+                <td className="py-2 text-right">BK×TM = 64</td>
+                <td className="py-2 text-right font-bold text-violet-700">64</td>
+              </tr>
+              <tr className="border-b border-slate-100">
+                <td className="py-2 font-sans">smem_B</td>
+                <td className="py-2 text-right">BK×TM×TN = 512</td>
+                <td className="py-2 text-right font-bold text-violet-700">64</td>
+              </tr>
+              <tr>
+                <td className="py-2 font-sans font-bold">合计</td>
+                <td className="py-2 text-right font-bold">576</td>
+                <td className="py-2 text-right font-black text-violet-700">128（↓4.5×）</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="mt-3 rounded-xl bg-violet-50 border border-violet-100 px-3 py-2.5 text-xs leading-6 text-violet-950">
+            整个 block（256 线程）每个 K tile：{fmt(mode===0?147456:32768)} 条 LDS 指令。
+            寄存器中转把 smem 带宽压力降低了 <b>4.5×</b>，这正是 note.md §5 的访问次数表。
+          </div>
+        </div>
+      </div>
+
+      <div className="soft-card bg-white p-4 mt-4">
+        <div className="text-sm font-extrabold text-slate-900 mb-3">一个 kk 内的指令流水（示意）</div>
+        <div className="overflow-x-auto scrollbar-thin">
+          <svg width="100%" height="120" viewBox="0 0 900 120" className="min-w-[640px]">
+            {pipeBoxes.map((b, idx) => {
+              const x = 20 + acc; const w = Math.max(14, Math.min(150, b.n * 2 + 12)); acc += w + 4;
+              return (
+                <g key={idx}>
+                  <rect x={x} y="34" width={w} height="34" rx="7" fill={boxColor[b.t]} opacity="0.88"/>
+                  <text x={x+w/2} y="55" textAnchor="middle" fontSize={w>40?10:8} fontWeight="800" fill="#fff">
+                    {b.n>1?`${boxLabel[b.t]}×${b.n}`:boxLabel[b.t]}
+                  </text>
+                </g>
+              );
+            })}
+            <text x="20" y="94" fontSize="10.5" fill="#64748b">
+              {mode===0 ? "蓝色/绿色 = 访问共享内存（依赖 MIO 流水线）；红色 = FMA。FMA 与 LDS 交替，MIO 一繁忙 warp 就停顿。"
+                        : "开头 16 条 LDS 把片段装进寄存器，之后 64 条 FMA 连续发射 —— 计算与访存彻底解耦。"}
+            </text>
+          </svg>
+        </div>
+        <div className="mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2.5 text-xs leading-6 text-amber-950">
+          <b>关于编译器：</b>直读版本中 <span className="mono">smem_B[kk][…]</span> 对 i 循环是不变量，编译器（LICM）有可能完成同样的变换；
+          但显式的 <span className="mono">reg_A / reg_B</span> 数组把复用固化到代码结构里，跨编译器稳定成立，寄存器占用也可预测。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 3：线程映射与 C 所有权（连续 8×8 vs 跨步分布）
+// =================================================================
+function MappingPanel({tid, setTid, showCoal, setShowCoal}) {
+  const tRow0 = Math.floor(tid / THREAD_COLS) * TM;
+  const tCol0 = (tid % THREAD_COLS) * TN;
+  const warpId = Math.floor(tid / 32);
+
+  const cRow = Math.floor(tid / 16), cCol = tid % 16; // block tiling 的跨步坐标
+  const coalRows = Array.from({length:8}, (_,i)=>cRow + i*16);
+  const coalCols = Array.from({length:8}, (_,j)=>cCol + j*16);
+
+  const S = 2.5; // C tile 每个 cell 的像素
+  const gx = 372, gy = 56, gs = 320;
+
+  return (
+    <div>
+      <div className="grid lg:grid-cols-[minmax(300px,380px)_1fr] gap-5 items-start">
+        {/* 左：16×16 线程网格 */}
+        <div className="soft-card bg-white p-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-extrabold text-slate-900">线程网格 16 × 16</div>
+            <Pill color="purple">tid = {tid}</Pill>
+          </div>
+          <div className="text-xs text-slate-500 mt-1">tid 按行摊平：tid = grid_row × 16 + grid_col</div>
+          <div className="overflow-x-auto scrollbar-thin mt-3">
+            <svg width="100%" viewBox="0 0 372 396" className="min-w-[300px]">
+              {Array.from({length:16}).flatMap((_, r)=>
+                Array.from({length:16}).map((__, c)=>{
+                  const t = r*16+c;
+                  const inWarp = Math.floor(t/32) === warpId;
+                  const self = t === tid;
+                  return (
+                    <g key={t}>
+                      <rect x={10+c*22} y={22+r*22} width="20.5" height="20.5" rx="3.5"
+                            fill={self ? "#7c3aed" : inWarp ? "#ddd6fe" : "#f1f5f9"}
+                            stroke={self ? "#5b21b6" : inWarp ? "#c4b5fd" : "#e2e8f0"} strokeWidth={self?1.6:1}/>
+                      {self && <text x={10+c*22+10.2} y={22+r*22+13.5} textAnchor="middle" fontSize="8.5" fontWeight="800" fill="#fff">{tid}</text>}
+                    </g>
+                  );
+                })
+              )}
+              <text x="10" y="14" fontSize="11" fontWeight="700" fill="#475569">淡紫 = 同一 warp（tid {warpId*32}–{warpId*32+31}，占 2 整行）</text>
+              <text x="176" y="386" textAnchor="middle" fontSize="10" fill="#64748b">grid_col（0–15）</text>
+              <text x="-4" y="200" fontSize="10" fill="#64748b" transform="rotate(-90 -4 200)" textAnchor="middle">grid_row（0–15）</text>
+            </svg>
+          </div>
+          <input type="range" min="0" max="255" value={tid} className="w-full mt-2 accent-violet-600"
+                 onChange={e=>setTid(Number(e.target.value))}/>
+        </div>
+
+        {/* 右：128×128 C tile 上的所有权 */}
+        <div className="soft-card bg-white p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-extrabold text-slate-900">该线程在 128×128 C tile 中负责的 64 个输出</div>
+            <button onClick={()=>setShowCoal(!showCoal)} className="btn btn-ghost text-xs">
+              {showCoal ? "✓ 正在对照 block tiling" : "对照：block tiling 的跨步分布"}
+            </button>
+          </div>
+          <div className="overflow-x-auto scrollbar-thin mt-3">
+            <svg width="100%" viewBox="330 36 384 396" className="min-w-[400px]">
+              <rect x={gx} y={gy} width={gs} height={gs} rx="10" fill="#fff7ed" stroke="#fdba74"/>
+              {/* 8×8 tile 网格线 */}
+              {Array.from({length:17}).map((_,i)=>(
+                <g key={"gl"+i}>
+                  <line x1={gx+i*20} x2={gx+i*20} y1={gy} y2={gy+gs} stroke="#fed7aa" strokeWidth={i%2===0?1:0.5}/>
+                  <line x1={gx} x2={gx+gs} y1={gy+i*20} y2={gy+i*20} stroke="#fed7aa" strokeWidth={i%2===0?1:0.5}/>
+                </g>
+              ))}
+              {/* warp 0 覆盖带（前 2 行 tile） */}
+              {warpId === 0 && !showCoal && (
+                <rect x={gx} y={gy} width={gs} height={40} fill="#7c3aed" opacity="0.10"/>
+              )}
+
+              {showCoal ? (
+                <g>
+                  {coalRows.flatMap((r, i)=> coalCols.map((c, j)=>(
+                    <circle key={i+"-"+j} cx={gx+(c+0.5)*S} cy={gy+(r+0.5)*S} r="2.4" fill="#e11d48"/>
+                  )))}
+                  <text x={gx} y={gy+gs+22} fontSize="11" fill="#be123c" fontWeight="700">
+                    block tiling：64 个点以 16 为间距跨步分布（row = c_row + i×16）
+                  </text>
+                </g>
+              ) : (
+                <g>
+                  <rect x={gx+tCol0*S} y={gy+tRow0*S} width={8*S} height={8*S} rx="3"
+                        fill="#ea580c" opacity="0.85" stroke="#c2410c" strokeWidth="1.5"
+                        className="compute-glow"/>
+                  <text x={gx+tCol0*S+4} y={gy+tRow0*S+14} fontSize="8.5" fontWeight="800" fill="#fff">8×8</text>
+                  <text x={gx} y={gy+gs+22} fontSize="11" fill="#9a3412" fontWeight="700">
+                    thread tiling：连续 8×8 块 · tile_row0={tRow0}, tile_col0={tCol0}
+                  </text>
+                  <text x={gx} y={gy+gs+40} fontSize="10.5" fill="#64748b">
+                    紫色带 = warp {warpId} 的 32 个线程覆盖的 16×128 条带
+                  </text>
+                </g>
+              )}
+              <text x={gx+gs/2} y={gy-10} textAnchor="middle" fontSize="11" fill="#475569">128 列</text>
+              <text x={gx-14} y={gy+gs/2} textAnchor="middle" fontSize="11" fill="#475569" transform={`rotate(-90 ${gx-14} ${gy+gs/2})`}>128 行</text>
+            </svg>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3 mt-3">
+            <div className="rounded-xl bg-slate-50 border px-3 py-2.5 mono text-xs leading-6">
+              <div className="font-sans font-bold text-slate-900 mb-1">thread tiling 的映射</div>
+              tile_row0 = (tid / 16) × 8 = {tRow0}<br/>
+              tile_col0 = (tid % 16) × 8 = {tCol0}<br/>
+              row = tile_row0 + i（i = 0…7）
+            </div>
+            <div className="rounded-xl bg-slate-50 border px-3 py-2.5 mono text-xs leading-6">
+              <div className="font-sans font-bold text-slate-900 mb-1">block tiling 的映射（对照）</div>
+              c_row = tid / 16 = {cRow}, c_col = tid % 16 = {cCol}<br/>
+              row = c_row + i × 16<br/>
+              col = c_col + j × 16
+            </div>
+          </div>
+          <div className="mt-3 rounded-xl bg-blue-50 border border-blue-100 px-3 py-2.5 text-xs leading-6 text-blue-950">
+            两种分布对计算语义完全等价。thread tiling 采用<b>连续块</b>：索引更规整、写回时相邻线程输出相邻列
+            （16 线程 × 8 float = 一行 512B 连续），也为后续 warp 级排布与 float4 向量化铺路。
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 4：kk 步进 —— reg_A / reg_B 装载 + 寄存器外积
+// =================================================================
+function KkStepper({kk, sub, tid, kIndex, kDone, playing}) {
+  const tRow0 = Math.floor(tid / THREAD_COLS) * TM;
+  const tCol0 = (tid % THREAD_COLS) * TN;
+  const rows = Array.from({length:8}, (_,i)=>tRow0+i);
+  const cols = Array.from({length:8}, (_,j)=>tCol0+j);
+  const kG = kIndex*8 + kk; // 全局 k
+
+  const accum = useMemo(()=>{
+    const out = [];
+    for (let i=0;i<8;i++){
+      const line = [];
+      for (let j=0;j<8;j++){
+        let s = 0;
+        for (let k=0;k<kDone;k++) s += AVAL(rows[i], k) * BVAL(k, cols[j]);
+        line.push(s);
+      }
+      out.push(line);
+    }
+    return out;
+  }, [kDone, tRow0, tCol0]);
+
+  const aX=16, aY=40, aW=80, aH=256;      // smem_A
+  const rAX=296, rAW=48;                   // reg_A
+  const cX=420, cY=40, cS=30;              // accum
+  const rBY=306, rBW=240;                  // reg_B
+  const bX=16, bY=306, bW=320, bH=44;      // smem_B
+
+  return (
+    <div className="grid xl:grid-cols-[minmax(560px,1fr)_300px] gap-4 items-start">
+      <div className="rounded-2xl border border-slate-200 bg-white p-3 overflow-x-auto scrollbar-thin">
+        <svg viewBox="0 0 700 470" className="w-full min-w-[620px]">
+          <ArrowMarker/>
+          <text x="56" y="24" textAnchor="middle" fontSize="12" fontWeight="800" fill="#1d4ed8">smem_A[128][8]</text>
+          <text x="320" y="24" textAnchor="middle" fontSize="12" fontWeight="800" fill="#be123c">reg_A[8]</text>
+          <text x="540" y="24" textAnchor="middle" fontSize="12" fontWeight="800" fill="#be123c">accum[8][8]</text>
+
+          {/* smem_A */}
+          <rect x={aX} y={aY} width={aW} height={aH} rx="10" fill="#eff6ff" stroke="#93c5fd"/>
+          <MatrixGrid x={aX} y={aY} w={aW} h={aH} rows={8} cols={8} stroke="#bfdbfe"/>
+          <rect x={aX+kk*10} y={aY} width="10" height={aH} fill="#3b82f6" opacity="0.4"
+                className={sub===0&&playing?"pulse-soft":""}/>
+          <rect x={aX} y={aY+(tRow0/128)*aH} width={aW} height={(8/128)*aH} fill="#fb7185" opacity="0.28"/>
+          {rows.map((r,i)=>(
+            <circle key={"ad"+i} cx={aX+kk*10+5} cy={aY+((r+0.5)/128)*aH} r="3" fill="#e11d48"/>
+          ))}
+
+          {/* smem_A -> reg_A */}
+          <path d={`M${aX+aW+4} 168 C180 168 230 168 ${rAX-6} 168`} fill="none" stroke={COLORS.A} strokeWidth="2.6"
+                markerEnd="url(#arrowBlue)" className={sub===0&&playing?"flow-line":""} opacity={sub===0?1:.3}/>
+          <text x="196" y="156" textAnchor="middle" fontSize="9.5" fontWeight="700" fill="#1d4ed8">8 × LDS</text>
+          <text x="196" y="184" textAnchor="middle" fontSize="9" fill="#64748b">取第 kk={kk} 列</text>
+          <text x="196" y="198" textAnchor="middle" fontSize="9" fill="#be123c">8 行连续（{tRow0}–{tRow0+7}）</text>
+
+          {/* reg_A */}
+          {rows.map((r,i)=>(
+            <g key={"ra"+i}>
+              <rect x={rAX} y={40+i*32} width={rAW} height="30" rx="5"
+                    fill={sub>=1?"#ffe4e6":"#f8fafc"} stroke={sub>=1?"#fb7185":"#e2e8f0"} strokeWidth="1.2"
+                    className={sub===0&&playing?"pulse-soft":""}/>
+              <text x={rAX-8} y={58+i*32} textAnchor="end" fontSize="9" fill="#64748b">a{i}</text>
+              <text x={rAX+rAW/2} y={59+i*32} textAnchor="middle" fontSize="11" fontWeight="800"
+                    fill={sub>=1?"#be123c":"#cbd5e1"}>{sub>=1 ? AVAL(r, kG) : "?"}</text>
+            </g>
+          ))}
+
+          {/* reg_A -> accum */}
+          <path d="M352 160 L412 160" fill="none" stroke={COLORS.R} strokeWidth="2.6"
+                markerEnd="url(#arrowRose)" className={sub===2&&playing?"flow-line":""} opacity={sub===2?1:.3}/>
+          <text x="382" y="148" textAnchor="middle" fontSize="16" fontWeight="900" fill="#7c3aed">⊗</text>
+
+          {/* accum */}
+          {Array.from({length:8}).map((_,j)=>(
+            <text key={"cj"+j} x={cX+j*cS+15} y="36" textAnchor="middle" fontSize="8" fill="#94a3b8">j={j}</text>
+          ))}
+          {Array.from({length:8}).map((_,i)=>(
+            <text key={"ci"+i} x={cX-6} y={cY+i*cS+19} textAnchor="end" fontSize="8" fill="#94a3b8">i={i}</text>
+          ))}
+          {accum.flatMap((line,i)=>line.map((v,j)=>(
+            <g key={"ac"+i+"-"+j}>
+              <rect x={cX+j*cS+1} y={cY+i*cS+1} width={cS-3} height={cS-3} rx="4"
+                    fill={(i===2||j===3)?"#ffe4e6":"#fff1f2"} stroke={(i===2||j===3)?"#fb7185":"#fecdd3"}
+                    opacity={sub===2?(0.6+(((i+j+kk)%3)*0.13)):0.92}
+                    className={sub===2&&playing?"pulse-soft":""}/>
+              <text x={cX+j*cS+15} y={cY+i*cS+19} textAnchor="middle" fontSize="8.5" fontWeight="700" fill="#9f1239">{v}</text>
+            </g>
+          )))}
+          <rect x={cX+3*cS+1} y={cY+2*cS+1} width={cS-3} height={cS-3} rx="4" fill="none" stroke="#be123c" strokeWidth="2"/>
+          <text x={cX+120} y={cY+256} textAnchor="middle" fontSize="10" fill="#475569">已累计 {kDone} 个 k</text>
+
+          {/* reg_B -> accum */}
+          <path d={`M${cX+30} ${rBY-4} L${cX+30} ${cY+246}`} fill="none" stroke={COLORS.B} strokeWidth="2.6"
+                markerEnd="url(#arrowGreen)" className={sub===2&&playing?"flow-line":""} opacity={sub===2?1:.3}/>
+
+          {/* reg_B */}
+          <text x={cX} y={rBY+52} fontSize="12" fontWeight="800" fill="#047857">reg_B[8] ← smem_B 第 kk 行的 8 个连续值</text>
+          {cols.map((c,j)=>(
+            <g key={"rb"+j}>
+              <rect x={cX+j*cS} y={rBY} width={cS-2} height="34" rx="5"
+                    fill={sub===2?"#d1fae5":"#f8fafc"} stroke={sub===2?"#34d399":"#e2e8f0"} strokeWidth="1.2"
+                    className={sub===1&&playing?"pulse-soft":""}/>
+              <text x={cX+j*cS+(cS-2)/2} y={rBY+21} textAnchor="middle" fontSize="10.5" fontWeight="800"
+                    fill={sub===2?"#047857":"#cbd5e1"}>{sub===2 ? BVAL(kG, c) : "?"}</text>
+            </g>
+          ))}
+
+          {/* smem_B -> reg_B */}
+          <path d={`M${bX+bW+6} 324 C368 324 388 324 ${cX-8} 324`} fill="none" stroke={COLORS.B} strokeWidth="2.6"
+                markerEnd="url(#arrowGreen)" className={sub===1&&playing?"flow-line":""} opacity={sub===1?1:.3}/>
+          <text x="378" y="312" textAnchor="middle" fontSize="9.5" fontWeight="700" fill="#047857">8 × LDS</text>
+
+          {/* smem_B */}
+          <rect x={bX} y={bY} width={bW} height={bH} rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+          <MatrixGrid x={bX} y={bY} w={bW} h={bH} rows={8} cols={8} stroke="#a7f3d0"/>
+          <rect x={bX} y={bY+kk*(bH/8)} width={bW} height={bH/8} fill="#10b981" opacity="0.42"
+                className={sub===1&&playing?"pulse-soft":""}/>
+          <rect x={bX+(tCol0/128)*bW} y={bY} width={(8/128)*bW} height={bH} fill="#fb7185" opacity="0.28"/>
+          {cols.map((c,j)=>(
+            <circle key={"bd"+j} cx={bX+((c+0.5)/128)*bW} cy={bY+kk*(bH/8)+(bH/16)} r="3" fill="#e11d48"/>
+          ))}
+          <text x={bX+bW/2} y={bY+bH+16} textAnchor="middle" fontSize="10" fill="#475569">smem_B[8][128] · 取第 kk={kk} 行 · 本线程 8 列连续（{tCol0}–{tCol0+7}）</text>
+        </svg>
+      </div>
+
+      <div className="space-y-3">
+        <div className="soft-card bg-white p-4">
+          <div className="text-xs text-slate-500">当前线程</div>
+          <div className="mono text-sm font-bold mt-1">tid = {tid} → tile ({tRow0}, {tCol0})</div>
+          <div className="text-xs text-slate-500 mt-3">当前步</div>
+          <div className="text-sm font-bold text-violet-700 mt-1 leading-6">
+            {sub===0 && <>① reg_A ← smem_A[ rows , {kG} ]<br/><span className="text-slate-500 font-normal">8 次 LDS，行连续但跨行 → 暂时只能标量读</span></>}
+            {sub===1 && <>② reg_B ← smem_B[ {kG} , cols ]<br/><span className="text-slate-500 font-normal">8 次 LDS，地址连续</span></>}
+            {sub===2 && <>③ accum[i][j] += reg_A[i] × reg_B[j]<br/><span className="text-slate-500 font-normal">64 次 FMA，全程不碰共享内存</span></>}
+          </div>
+        </div>
+        <div className="soft-card bg-white p-4">
+          <div className="flex items-end justify-between">
+            <div>
+              <div className="text-xs text-slate-500">BK 进度</div>
+              <div className="text-2xl font-black text-rose-600">{kDone % 8 === 0 && kDone !== 0 && sub !== 2 ? (kDone/8) : kk+1}/8</div>
+            </div>
+            <div className="text-right text-xs text-slate-500 leading-5">
+              每 kk：16 LDS · 64 FMA<br/>每 K tile：128 LDS · 512 FMA
+            </div>
+          </div>
+          <div className="mt-3"><ProgressBar value={((sub===2?kk+1:kk)/8)*100} color="bg-rose-500"/></div>
+        </div>
+        <div className="rounded-xl bg-violet-50 border border-violet-100 px-3 py-3 text-xs leading-6 text-violet-950">
+          表格里的数字是按 <span className="mono">A(r,c)=(r·7+c·3)%9+1</span>、<span className="mono">B(r,c)=(r·5+c·2)%9+1</span> 真实累加出来的 ——
+          accum 单元格会随 kIndex 与 kk 逐步增长，与代码语义一致。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 5：寄存器预算矩阵
+// =================================================================
+function RegBudget() {
+  const opts = [4, 8, 16];
+  const [sel, setSel] = useState({tm:8, tn:8});
+  const info = (tm, tn) => {
+    const total = tm + tn + tm*tn;
+    const ai = (tm*tn) / (2*(tm+tn));
+    const threads = (BM/tm) * (BN/tn);
+    let status = "ok";
+    if (total > 255) status = "spill";
+    else if (total > 150 || threads < 128) status = "warn";
+    return {total, ai, threads, status};
+  };
+  const cur = info(sel.tm, sel.tn);
+
+  return (
+    <div className="grid lg:grid-cols-[minmax(320px,420px)_1fr] gap-5 items-start">
+      <div className="soft-card bg-white p-4">
+        <div className="font-extrabold text-slate-900">TM × TN 组合矩阵（点击选择）</div>
+        <div className="text-xs text-slate-500 mt-1">cell 显示：总寄存器 / 算术强度 / 每 block 线程数</div>
+        <div className="mt-3 grid grid-cols-[auto_repeat(3,1fr)] gap-2 items-stretch">
+          <div/>
+          {opts.map(tn=><div key={"h"+tn} className="text-center text-xs font-bold text-slate-500">TN={tn}</div>)}
+          {opts.map(tm=>(
+            <React.Fragment key={"row"+tm}>
+              <div className="flex items-center text-xs font-bold text-slate-500 pr-1">TM={tm}</div>
+              {opts.map(tn=>{
+                const d = info(tm,tn);
+                const active = sel.tm===tm && sel.tn===tn;
+                const bg = d.status==="spill" ? "bg-rose-50 border-rose-300 text-rose-700"
+                        : d.status==="warn" ? "bg-amber-50 border-amber-300 text-amber-700"
+                        : "bg-emerald-50 border-emerald-200 text-emerald-800";
+                return (
+                  <button key={tm+"-"+tn} onClick={()=>setSel({tm,tn})}
+                    className={`rounded-xl border p-2.5 text-left transition ${bg} ${active?"ring-4 ring-violet-200 scale-[1.03]":""} hover:scale-[1.03]`}>
+                    <div className="text-base font-black mono leading-5">{d.total}</div>
+                    <div className="text-[10px] mono">AI {d.ai.toFixed(2)}</div>
+                    <div className="text-[10px] mono">{d.threads} thr</div>
+                  </button>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+          <Pill color="green">绿色：安全</Pill>
+          <Pill color="orange">黄色：寄存器偏多 / 线程偏少</Pill>
+          <Pill color="rose">红色：超 255 → spill</Pill>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="soft-card bg-white p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-extrabold text-slate-900">当前方案 TM={sel.tm}, TN={sel.tn}</div>
+            {sel.tm===8 && sel.tn===8 ? <Pill color="purple">本 kernel 的选择 ✓</Pill> : null}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-sm">
+            <div className="rounded-xl bg-slate-50 border px-3 py-2">
+              <div className="text-xs text-slate-500">accum</div>
+              <div className="font-black mono">{sel.tm}×{sel.tn} = {sel.tm*sel.tn}</div>
+            </div>
+            <div className="rounded-xl bg-slate-50 border px-3 py-2">
+              <div className="text-xs text-slate-500">frag</div>
+              <div className="font-black mono">{sel.tm}+{sel.tn} = {sel.tm+sel.tn}</div>
+            </div>
+            <div className="rounded-xl bg-slate-50 border px-3 py-2">
+              <div className="text-xs text-slate-500">总寄存器</div>
+              <div className={`font-black mono ${cur.status==="spill"?"text-rose-600":""}`}>{cur.total}</div>
+            </div>
+            <div className="rounded-xl bg-slate-50 border px-3 py-2">
+              <div className="text-xs text-slate-500">算术强度</div>
+              <div className="font-black mono">{cur.ai.toFixed(2)} F/B</div>
+            </div>
+          </div>
+          <div className={`mt-3 rounded-xl border px-3 py-2.5 text-xs leading-6 ${
+            cur.status==="spill" ? "bg-rose-50 border-rose-200 text-rose-900"
+            : cur.status==="warn" ? "bg-amber-50 border-amber-200 text-amber-900"
+            : "bg-emerald-50 border-emerald-200 text-emerald-900"}`}>
+            {cur.status==="spill" && <>accum 一项就要 {sel.tm*sel.tn} 个寄存器，超过单线程 255 上限 → 溢出到 Local Memory，性能反而劣化。</>}
+            {cur.status==="warn" && <>寄存器占用偏高或每 block 线程只有 {cur.threads} 个 —— warp 数不足，难以掩盖访存延迟。</>}
+            {cur.status==="ok" && <>总占用 ≈ {cur.total} + 少量索引开销 ≈ 90–120，约为 255 上限的一半，可保证每 SM 至少驻留 2 个 block（occupancy 友好）。</>}
+          </div>
+        </div>
+        <div className="rounded-xl bg-violet-50 border border-violet-100 px-4 py-3 text-xs leading-6 text-violet-950">
+          <b>为什么 8×8 是甜点：</b>AI = TM·TN / (2(TM+TN))，在 TM+TN 固定时由均值不等式知 TM=TN 最优；
+          而 TM=TN 增大时 AI 按 TM/4 线性涨，寄存器却按 TM² 涨 —— TM=TN=16 时 accum 需要 256 个寄存器直接溢出。
+          8×8 = 80 个寄存器恰好卡在「算术强度足够」与「occupancy 可保」的交点上。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// App
+// =================================================================
+function App(){
+  const [playing,setPlaying]=useState(true);
+  const [speed,setSpeed]=useState(1);
+  const [demoK,setDemoK]=useState(64);
+  const tiles = demoK/8;
+  const [kIndex,setKIndex]=useState(0);
+  const [step,setStep]=useState(0);      // 0..26：0 加载，1 屏障，2..25 计算（8 kk × 3 步），26 推进
+  const [tid,setTid]=useState(37);
+  const [showCoal,setShowCoal]=useState(false);
+  const timer=useRef(null);
+
+  const inCompute = step>=2 && step<=25;
+  const kk = inCompute ? Math.floor((step-2)/3) : 0;
+  const sub = inCompute ? (step-2)%3 : 0;
+  const phase = step===0 ? 0 : step===1 ? 1 : inCompute ? 2 : 3;
+  const kkDone = step>=26 ? 8 : inCompute ? kk + (sub===2?1:0) : 0;
+  const accumulation = Math.min(100, ((kIndex + kkDone/8)/tiles)*100);
+
+  function nextStep(){
+    if(step<26){ setStep(step+1); return; }
+    setStep(0);
+    if(kIndex<tiles-1) setKIndex(kIndex+1);
+    else { setKIndex(0); setPlaying(false); }
+  }
+  function reset(){ setPlaying(false); setKIndex(0); setStep(0); }
+
+  useEffect(()=>{
+    if(!playing) return;
+    const ms = Math.max(140, 650/speed);
+    timer.current=setTimeout(nextStep, ms);
+    return ()=>clearTimeout(timer.current);
+  },[playing, speed, step, kIndex, tiles]);
+
+  return (
+    <main className="max-w-[1480px] mx-auto px-4 sm:px-6 py-7 sm:py-10">
+
+      {/* Hero */}
+      <header className="mb-6">
+        <div className="card relative overflow-hidden p-6 sm:p-9">
+          <div className="pointer-events-none absolute -top-28 -right-24 w-80 h-80 rounded-full bg-gradient-to-br from-violet-200/45 to-blue-200/40 blur-3xl"/>
+          <div className="pointer-events-none absolute -bottom-32 -left-20 w-72 h-72 rounded-full bg-gradient-to-tr from-rose-200/35 to-violet-200/30 blur-3xl"/>
+          <div className="relative flex flex-col xl:flex-row xl:items-end xl:justify-between gap-6">
+            <div>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <Pill color="blue">BM = BN = 128</Pill>
+                <Pill color="green">BK = 8</Pill>
+                <Pill color="purple">TM = TN = 8</Pill>
+                <Pill color="rose">THREADS = 256（由 TM/TN 推导）</Pill>
+              </div>
+              <h1 className="text-3xl sm:text-[2.5rem] font-black tracking-tight text-slate-950 leading-tight">
+                CUDA GEMM：Thread 级 Tiling —— 寄存器中转动图解
+              </h1>
+              <p className="mt-3 text-slate-600 max-w-4xl leading-7">
+                对应 <span className="mono font-semibold">matmul_reg.cuh</span>。在 block tiling 基础上，把「从共享内存读」与「FMA」显式分离：
+                每个 kk 先把 A 的一列、B 的一行装进寄存器数组 <span className="mono">reg_A[8] / reg_B[8]</span>，
+                再在寄存器上完成 8×8 外积 —— 每个 K tile 的 smem 读取从 576 次降到 128 次。
+              </p>
+            </div>
+            <div className="text-sm text-slate-500 xl:text-right shrink-0">
+              <div>单页交互演示 · React + Tailwind CSS + SVG</div>
+              <div className="mt-1">加载部分与 block tiling 完全相同，见 <a className="text-blue-600 font-semibold hover:underline" href="./gemm_block_tiling_interactive.html">上一篇</a></div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* controls */}
+      <section className="glass-bar rounded-2xl p-4 sm:p-5 sticky top-3 z-20 mb-6">
+        <div className="flex flex-col xl:flex-row xl:items-center gap-4 xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={()=>setPlaying(!playing)} className={`btn ${playing?"btn-dark":"btn-blue"}`}>
+              {playing ? "暂停" : "播放"}
+            </button>
+            <button onClick={()=>{setPlaying(false);nextStep();}} className="btn btn-ghost">单步执行</button>
+            <button onClick={reset} className="btn btn-ghost">重置</button>
+            <div className="hidden sm:block w-px h-8 bg-slate-200 mx-1"/>
+            <PhaseBadge phase={phase} kk={kk} sub={sub}/>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <label className="flex items-center gap-2">
+              <span className="text-slate-500">演示 K</span>
+              <select value={demoK} onChange={e=>{setPlaying(false);setDemoK(Number(e.target.value));setKIndex(0);setStep(0);}}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 font-semibold">
+                <option value="32">32</option>
+                <option value="64">64</option>
+                <option value="128">128</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="text-slate-500">速度</span>
+              <input type="range" min=".5" max="3" step=".5" value={speed}
+                     onChange={e=>setSpeed(Number(e.target.value))} className="accent-violet-600"/>
+              <span className="w-8 font-bold">{speed}×</span>
+            </label>
+            <div className="text-right">
+              <div className="text-xs text-slate-500">C tile 累计进度</div>
+              <div className="font-black text-violet-700 leading-5">{Math.round(accumulation)}%</div>
+            </div>
+          </div>
+        </div>
+        <div className="hairline my-4"/>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-bold text-slate-400 shrink-0">K 时间轴</span>
+          <KTimeline tiles={tiles} kIndex={kIndex} setKIndex={(i)=>{setPlaying(false);setKIndex(i);setStep(0);}}/>
+        </div>
+      </section>
+
+      <section className="grid 2xl:grid-cols-2 gap-6">
+        <div className="card p-4 sm:p-5">
+          <SecTitle n="1" title="三级数据搬运链" right={<Pill color="blue">k = {kIndex*8}</Pill>}>
+            Global → Shared → Register → FMA。每一级都沿 K 维度迭代、搬运一小块、用尽复用再搬下一块。
+          </SecTitle>
+          <OverviewChain phase={phase} sub={sub} kIndex={kIndex} tiles={tiles} playing={playing} accumulation={accumulation}/>
+        </div>
+
+        <div className="card p-4 sm:p-5">
+          <SecTitle n="2" title="核心对比：把 smem 读取从 FMA 循环里拿出来">
+            thread tiling 唯一的算法改动就是加了两级寄存器数组，但访问次数差了 4.5 倍 —— 点击切换两种写法对比。
+          </SecTitle>
+          <ComparePanel/>
+        </div>
+      </section>
+
+      <section className="card p-4 sm:p-5 mt-6">
+        <SecTitle n="3" title="线程映射：16×16 网格，每线程拥有连续的 8×8 输出块">
+          拖动 tid 观察线程所有权。与 block tiling 的跨步分布对照：同样的 64 个输出，两种完全不同的空间分布。
+        </SecTitle>
+        <MappingPanel tid={tid} setTid={setTid} showCoal={showCoal} setShowCoal={setShowCoal}/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mt-6">
+        <SecTitle n="4" title="kk 步进：reg_A / reg_B 装载 → 寄存器外积"
+          right={<div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+            <span className="text-sm text-slate-500">tid</span>
+            <input type="range" min="0" max="255" value={tid} onChange={e=>setTid(Number(e.target.value))} className="accent-violet-600 w-32"/>
+            <Pill color="purple">{tid}</Pill>
+          </div>}>
+          播放/单步时，动画按 ① 载入 reg_A → ② 载入 reg_B → ③ 64 次 FMA 的顺序推进；accum 中的数字是真实累加值。
+        </SecTitle>
+        <KkStepper kk={kk} sub={sub} tid={tid} kIndex={kIndex} kDone={kIndex*8+kkDone} playing={playing}/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mt-6">
+        <SecTitle n="5" title="寄存器预算：为什么偏偏是 8×8">
+          accum、frag 片段与索引开销共享每线程 255 个寄存器的硬上限 —— TM·TN 按平方增长，AI 却只按线性增长。
+        </SecTitle>
+        <RegBudget/>
+      </section>
+
+      <section className="grid lg:grid-cols-3 gap-4 mt-6">
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="blue">①</Pill><h3 className="font-black tracking-tight">为什么必须是外积形式</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            内积写法（K 在最内层）中每个线程独立累加一个 C 元素，A/B 片段毫无复用。
+            外积写法把 K 提到最外层：固定 kk 后装一次片段，就能服务 TM×TN 次 FMA ——
+            复用来自循环顺序，而不是寄存器本身。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="rose">②</Pill><h3 className="font-black tracking-tight">MIO Throttle Stall</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            MIO 是负责共享内存等 I/O 的专用流水线。直读版本每个 FMA 都挂一次 LDS 依赖，
+            MIO 满载时 warp 只能停顿等发射；寄存器中转后，64 条 FMA 连续发射、完全不碰 MIO。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="purple">③</Pill><h3 className="font-black tracking-tight">同一公式的第三次出现</h3></div>
+          <div className="mono text-xs sm:text-sm leading-7 mt-3 text-slate-700">
+            block 级：1 / (2·(1/BM + 1/BN))<br/>
+            寄存器级：TM·TN / (2·(TM+TN))<br/>
+            TM = TN = 8 → AI = 2.0 FLOPs/Byte
+          </div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            外积本质是把 block 分块思想下沉到寄存器层级 —— 均值不等式的结论（两边取等）也随之复用。
+          </p>
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950 leading-6">
+        <b>准确性细节（通往下一篇的伏笔）：</b>
+        <span className="mono">reg_A[i] = smem_A[tile_row0+i][kk]</span> 在行主序 <span className="mono">[128][8]</span> 布局下是「固定列、跨行」的访问，
+        相邻元素地址相差 BK×4 = 32B —— <b>无法拼成 float4</b>；而 <span className="mono">reg_B</span> 的读取天然连续、可向量化。
+        要让 A 方向也向量化，就得把 A 在共享内存里转置存储 —— 这正是 <a className="font-semibold underline" href="./gemm_vectorized_interactive.html">float4 + 转置优化</a>要做的事。
+      </section>
+
+      <footer className="py-10 text-center text-xs text-slate-400">
+        CUDA GEMM Thread Tiling · Interactive Teaching Diagram ·
+        代码 <span className="mono">matmul_reg.cuh</span> · 笔记 note.md §5 ·
+        系列：<a className="hover:underline" href="./gemm_block_tiling_interactive.html">Block Tiling</a> →
+        <a className="hover:underline" href="./gemm_thread_tiling_interactive.html"> Thread Tiling</a> →
+        <a className="hover:underline" href="./gemm_warp_tiling_interactive.html"> Warp Tiling</a> →
+        <a className="hover:underline" href="./gemm_vectorized_interactive.html"> float4</a>
+      </footer>
+    </main>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

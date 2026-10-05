@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CUDA GEMM float4 向量化 + 共享内存转置 - Interactive</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(1100px 540px at 6% -8%, rgba(14,165,233,.10), transparent 62%),
+        radial-gradient(900px 480px at 98% 2%, rgba(124,58,237,.09), transparent 60%),
+        radial-gradient(900px 560px at 50% 108%, rgba(16,185,129,.08), transparent 62%),
+        #f7f9fc;
+      color: #0f172a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      background: rgba(255,255,255,.92);
+      border: 1px solid rgba(226,232,240,.95);
+      border-radius: 22px;
+      box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 16px 36px -16px rgba(15,23,42,.16);
+      backdrop-filter: blur(8px);
+      transition: box-shadow .25s ease, transform .25s ease;
+    }
+    .card:hover { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 22px 46px -18px rgba(15,23,42,.22); }
+    .soft-card {
+      border-radius: 18px;
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 1px 2px rgba(15,23,42,.04);
+      transition: box-shadow .2s ease, transform .2s ease;
+    }
+    .soft-card:hover { box-shadow: 0 8px 22px -12px rgba(15,23,42,.28); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .flow-line { stroke-dasharray: 9 8; animation: dash 1.0s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -34; } }
+    .pulse-soft { animation: pulseSoft 1.1s ease-in-out infinite; }
+    @keyframes pulseSoft {
+      0%,100% { opacity: .45; filter: drop-shadow(0 0 0 rgba(59,130,246,0)); }
+      50% { opacity: 1; filter: drop-shadow(0 0 8px rgba(59,130,246,.35)); }
+    }
+    .compute-glow { animation: computeGlow .9s ease-in-out infinite; }
+    @keyframes computeGlow {
+      0%,100% { filter: drop-shadow(0 0 0 rgba(244,63,94,0)); }
+      50% { filter: drop-shadow(0 0 11px rgba(244,63,94,.55)); }
+    }
+    .num-badge {
+      width: 2.15rem; height: 2.15rem;
+      border-radius: .85rem;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-weight: 900; color: #fff; font-size: .95rem;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      box-shadow: 0 8px 16px -8px rgba(37,99,235,.9);
+      flex: none;
+    }
+    .glass-bar {
+      background: rgba(255,255,255,.82);
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 10px 30px -18px rgba(15,23,42,.35);
+      backdrop-filter: blur(14px);
+    }
+    .btn {
+      border-radius: 12px; font-weight: 700; font-size: .875rem;
+      padding: .5rem .95rem;
+      transition: all .18s ease;
+      box-shadow: 0 1px 2px rgba(15,23,42,.06);
+    }
+    .btn-ghost { background: #fff; border: 1px solid #e2e8f0; color: #334155; }
+    .btn-ghost:hover { background: #f8fafc; border-color: #cbd5e1; transform: translateY(-1px); }
+    .btn-dark { background: #0f172a; color: #fff; border: 1px solid #0f172a; }
+    .btn-dark:hover { transform: translateY(-1px); box-shadow: 0 8px 18px -10px rgba(15,23,42,.9); }
+    .btn-blue { background: linear-gradient(135deg,#2563eb,#3b82f6); color: #fff; border: 1px solid #2563eb; }
+    .btn-blue:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -10px rgba(37,99,235,.9); }
+    .chip {
+      border-radius: 12px; font-size: .72rem; font-weight: 800;
+      padding: .4rem .7rem; border: 1px solid #e2e8f0; background: #fff; color: #64748b;
+      transition: all .18s ease; white-space: nowrap;
+    }
+    .chip:hover { border-color: #93c5fd; color: #1d4ed8; }
+    .chip-done { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    .chip-now {
+      background: linear-gradient(135deg,#2563eb,#3b82f6);
+      border-color: #2563eb; color: #fff;
+      box-shadow: 0 8px 16px -8px rgba(37,99,235,.9);
+    }
+    input[type="range"] { height: 1.25rem; }
+    .scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 3px solid rgba(59,130,246,.25);
+      outline-offset: 2px;
+    }
+    .hairline { height: 1px; background: linear-gradient(to right, transparent, #e2e8f0 20%, #e2e8f0 80%, transparent); }
+    svg text { user-select: none; }
+  </style>
+</head>
+
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useEffect, useMemo, useRef, useState } = React;
+
+// -----------------------------------------------------------------
+// 与 matmul_vec.cuh 一致的编译期常量（线程层级与 warp tiling 完全相同）
+//   BLOCK 128×128, BK=8, lane 4×8, lane tile 8×8, 8 warp = 256 线程
+//   加载：A_VEC_COLS = BK/4 = 2（float4 列数），A_ROWS_PER_PASS = 256/2 = 128
+//         B_VEC_COLS = BN/4 = 32，B_ROWS_PER_PASS = 256/32 = 8
+// -----------------------------------------------------------------
+const BM = 128, BN = 128, BK = 8;
+const WARP_M = 4, WARP_N = 8, TM = 8, TN = 8;
+const WARPS_N = 2;
+const THREADS = 256;
+const A_VEC_COLS = BK / 4;                  // 2
+const A_ROWS_PER_PASS = THREADS / A_VEC_COLS; // 128 = BM → 每线程恰好 1 行
+const B_VEC_COLS = BN / 4;                  // 32
+const B_ROWS_PER_PASS = THREADS / B_VEC_COLS; // 8 = BK → 每线程恰好 1 行
+
+const AVAL = (r, c) => ((r * 7 + c * 3) % 9) + 1;
+const BVAL = (r, c) => ((r * 5 + c * 2) % 9) + 1;
+
+function decompose(tid) {
+  const warp_id = Math.floor(tid / 32);
+  const lane_id = tid % 32;
+  const warp_grid_row = Math.floor(warp_id / WARPS_N);
+  const warp_grid_col = warp_id % WARPS_N;
+  const lane_grid_row = Math.floor(lane_id / WARP_N);
+  const lane_grid_col = lane_id % WARP_N;
+  const tile_row0 = (warp_grid_row * WARP_M + lane_grid_row) * TM;
+  const tile_col0 = (warp_grid_col * WARP_N + lane_grid_col) * TN;
+  return {warp_id, lane_id, tile_row0, tile_col0};
+}
+
+function MatrixGrid({x, y, w, h, rows=8, cols=8, stroke="#cbd5e1", opacity=.65}) {
+  const lines = [];
+  for (let i = 1; i < cols; i++) {
+    const xx = x + (w * i / cols);
+    lines.push(<line key={"v"+i} x1={xx} x2={xx} y1={y} y2={y+h} stroke={stroke} opacity={opacity} strokeWidth="0.8"/>);
+  }
+  for (let i = 1; i < rows; i++) {
+    const yy = y + (h * i / rows);
+    lines.push(<line key={"h"+i} x1={x} x2={x+w} y1={yy} y2={yy} stroke={stroke} opacity={opacity} strokeWidth="0.8"/>);
+  }
+  return <>{lines}</>;
+}
+
+function ArrowMarker() {
+  return (
+    <defs>
+      <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+      </marker>
+      <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#059669"/>
+      </marker>
+      <marker id="arrowRose" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#e11d48"/>
+      </marker>
+      <marker id="arrowSlate" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
+      </marker>
+      <marker id="arrowCyan" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#0891b2"/>
+      </marker>
+    </defs>
+  )
+}
+
+function Pill({children, color="slate"}) {
+  const styles = {
+    blue:"bg-blue-50 text-blue-700 border-blue-200",
+    green:"bg-emerald-50 text-emerald-700 border-emerald-200",
+    orange:"bg-orange-50 text-orange-700 border-orange-200",
+    rose:"bg-rose-50 text-rose-700 border-rose-200",
+    purple:"bg-violet-50 text-violet-700 border-violet-200",
+    cyan:"bg-cyan-50 text-cyan-700 border-cyan-200",
+    slate:"bg-slate-50 text-slate-600 border-slate-200",
+  };
+  return <span className={"inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-semibold tracking-tight "+styles[color]}>{children}</span>
+}
+
+function ProgressBar({value, color="bg-cyan-500"}) {
+  return (
+    <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+      <div className={"h-full rounded-full transition-all duration-300 "+color} style={{width:`${Math.max(0,Math.min(100,value))}%`}} />
+    </div>
+  )
+}
+
+function SecTitle({n, title, children, right}) {
+  return (
+    <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4 mb-5">
+      <div className="flex items-start gap-3">
+        <div className="num-badge">{n}</div>
+        <div>
+          <h2 className="text-xl sm:text-[1.4rem] font-black tracking-tight text-slate-900 leading-snug">{title}</h2>
+          {children ? <p className="text-sm text-slate-500 mt-1.5 leading-6 max-w-3xl">{children}</p> : null}
+        </div>
+      </div>
+      {right ? <div className="flex flex-wrap items-center gap-2">{right}</div> : null}
+    </div>
+  )
+}
+
+function KTimeline({tiles, kIndex, setKIndex}) {
+  return (
+    <div className="overflow-x-auto scrollbar-thin pb-1">
+      <div className="flex min-w-max gap-2">
+        {Array.from({length:tiles}).map((_,i)=>(
+          <button key={i} onClick={()=>setKIndex(i)}
+            className={`chip ${i===kIndex ? "chip-now" : i<kIndex ? "chip-done" : ""}`}>
+            k={i*8}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function PhaseBadge({phase, kk, sub}) {
+  const subName = ["2× LDS.128 → reg_A", "2× LDS.128 → reg_B", "64 次 FMA"][sub] || "";
+  const phases = [
+    {name:"向量加载 A", detail:"LDG.128 → 转置写入 smem_A_T", color:"blue"},
+    {name:"向量加载 B", detail:"LDG.128 → STS.128", color:"green"},
+    {name:"同步屏障", detail:"__syncthreads()", color:"purple"},
+    {name:"warp 外积", detail:`kk = ${kk} · ${subName}`, color:"rose"},
+    {name:"推进 / 写回", detail:"进入下一 K tile", color:"orange"},
+  ];
+  const p = phases[phase];
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+      <Pill color={p.color}>{p.name}</Pill>
+      <span className="text-sm text-slate-600">{p.detail}</span>
+    </div>
+  )
+}
+
+// =================================================================
+// Section 1：指令数对比（每 block · 每 K tile）
+// =================================================================
+function InstrCompare() {
+  const groups = [
+    {label:"全局读取（Global → 寄存器）", scalar:2048, vec:512, sLabel:"2048 × LDG.32", vLabel:"512 × LDG.128", note:"↓4×"},
+    {label:"共享写入（→ smem）",         scalar:2048, vec:1280, sLabel:"2048 × STS.32", vLabel:"1024 STS.32 + 256 STS.128", note:"↓1.6×"},
+    {label:"计算期共享读取（smem → 寄存器）", scalar:32768, vec:8192, sLabel:"32768 × LDS.32", vLabel:"8192 × LDS.128", note:"↓4×"},
+  ];
+  const maxW = 400;
+  return (
+    <div>
+      <div className="overflow-x-auto scrollbar-thin">
+        <svg viewBox="0 0 780 340" className="w-full min-w-[600px]">
+          <ArrowMarker/>
+          <rect x="470" y="14" width="14" height="14" rx="3" fill="#94a3b8"/>
+          <text x="492" y="26" fontSize="11.5" fill="#475569">warp tiling（标量）</text>
+          <rect x="620" y="14" width="14" height="14" rx="3" fill="#7c3aed"/>
+          <text x="642" y="26" fontSize="11.5" fill="#475569">vec4 版本</text>
+
+          {groups.map((g, gi)=>{
+            const y = 64 + gi*92;
+            const wS = Math.max(24, g.scalar/32768*maxW*(g.scalar>20000?1:g.scalar/2048>2?2:1));
+            // 每组独立归一化
+            const ws = Math.max(24, (g.scalar/Math.max(g.scalar,g.vec))*maxW);
+            const wv = Math.max(24, (g.vec/Math.max(g.scalar,g.vec))*maxW);
+            return (
+              <g key={gi}>
+                <text x="16" y={y-10} fontSize="12.5" fontWeight="800" fill="#0f172a">{g.label}</text>
+                <rect x="16" y={y} width={ws} height="26" rx="7" fill="#94a3b8" opacity="0.85"/>
+                <text x={16+ws+10} y={y+17} fontSize="11" fontWeight="700" fill="#475569">{g.sLabel}</text>
+                <rect x="16" y={y+34} width={wv} height="26" rx="7" fill="#7c3aed"/>
+                <text x={16+wv+10} y={y+51} fontSize="11" fontWeight="700" fill="#5b21b6">{g.vLabel}</text>
+                <rect x="700" y={y+8} width="56" height="44" rx="12" fill="#ecfeff" stroke="#a5f3fc"/>
+                <text x="728" y={y+35} textAnchor="middle" fontSize="13" fontWeight="900" fill="#0e7490">{g.note}</text>
+              </g>
+            );
+          })}
+          <text x="16" y="330" fontSize="10.5" fill="#64748b">口径：每 block · 每 K tile（256 线程）。注意每组横条的长度只在组内可比。</text>
+        </svg>
+      </div>
+      <div className="grid lg:grid-cols-3 gap-3 mt-3">
+        <div className="soft-card bg-white p-3.5 text-xs leading-6 text-slate-600">
+          <b className="text-slate-900">字节数完全相同。</b>
+          float4 不减少搬运量（A/B tile 仍是 2×4KB），减少的是<b>指令条数</b> —— 128-bit 访存指令一次搬运 4 个 float。
+        </div>
+        <div className="soft-card bg-white p-3.5 text-xs leading-6 text-slate-600">
+          <b className="text-slate-900">STS 只降到 1.6×：</b>A 的转置写是「一次读、四散写」，4 个元素落到 4 个不同行，只能拆成 4 条 STS.32；
+          B 的布局不变，写随读一起向量化成 STS.128。
+        </div>
+        <div className="soft-card bg-white p-3.5 text-xs leading-6 text-slate-600">
+          <b className="text-slate-900">为什么值得：</b>指令更少 → 发射压力（LSU / MIO 队列）更低，留出更多发射槽给 FMA；
+          同时 reg_A 的读取从此可以向量化（见第 2 节）。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 2：转置的故事 —— 布局决定能否向量化
+// =================================================================
+function TransposeStory({tid, kIndex}) {
+  const d = decompose(tid);
+  const kk = 3; // 展示固定的 kk=3（全局 k = kIndex*8+3），可通过 K 时间轴换 tile
+
+  // 左：smem_A[128][8]，读 (tile_row0..+7, kk)，步长 32B
+  const aX=40, aY=90, aW=120, aH=224;
+  // 右：smem_A_T[8][128]，读 (kk, tile_row0..+7)，连续 32B
+  const tX=560, tY=150, tW=340, tH=64;
+
+  return (
+    <div className="overflow-x-auto scrollbar-thin">
+      <svg viewBox="0 0 960 400" className="w-full min-w-[720px]">
+        <ArrowMarker/>
+        {/* ---------- 左：转置前 ---------- */}
+        <text x="24" y="34" fontSize="14" fontWeight="800" fill="#be123c">转置前：smem_A[128][8] —— reg_A 跨行读同一列</text>
+        <text x="24" y="54" fontSize="11" fill="#64748b">行主序下，固定 kk 的相邻行地址相差 BK×4 = 32B</text>
+        <rect x={aX} y={aY} width={aW} height={aH} rx="10" fill="#eff6ff" stroke="#93c5fd"/>
+        <MatrixGrid x={aX} y={aY} w={aW} h={aH} rows={8} cols={8} stroke="#bfdbfe"/>
+        <rect x={aX+kk*15} y={aY+(d.tile_row0/128)*aH} width="15" height={(8/128)*aH}
+              fill="#e11d48" opacity="0.75" className="pulse-soft"/>
+        <text x={aX+60} y={aY-10} textAnchor="middle" fontSize="10" fill="#475569">8 列</text>
+        <text x={aX-10} y={aY+aH/2} fontSize="10" fill="#475569" textAnchor="middle" transform={`rotate(-90 ${aX-10} ${aY+aH/2})`}>128 行</text>
+        <text x="10" y={aY+aH+18} fontSize="10.5" fill="#475569">
+          高亮：本线程的 8 个单元（行 {d.tile_row0}–{d.tile_row0+7}，第 kk={kk} 列）
+        </text>
+
+        {/* 放大：8 个地址 */}
+        <text x="216" y="90" fontSize="11.5" fontWeight="800" fill="#0f172a">地址视图（放大）</text>
+        {Array.from({length:8}).map((_,i)=>(
+          <g key={"za"+i}>
+            <rect x="240" y={102+i*28} width="56" height="22" rx="5" fill="#fff1f2" stroke="#fb7185"/>
+            <text x="268" y={117+i*28} textAnchor="middle" fontSize="9.5" fill="#9f1239">+{i*32}B</text>
+            {i<7 && <text x="296" y={117+i*28} fontSize="8.5" fill="#e11d48">↕ 步长 32B</text>}
+          </g>
+        ))}
+        <rect x="216" y="330" width="150" height="30" rx="10" fill="#fff1f2" stroke="#fecdd3"/>
+        <text x="291" y="349" textAnchor="middle" fontSize="11" fontWeight="800" fill="#be123c">LDS.32 × 8，无法 float4</text>
+
+        {/* 中间箭头 */}
+        <path d="M400 180 C440 180 470 180 510 180" fill="none" stroke="#0891b2" strokeWidth="3.4"
+              markerEnd="url(#arrowCyan)" className="flow-line"/>
+        <rect x="404" y="132" width="100" height="30" rx="12" fill="#ecfeff" stroke="#a5f3fc"/>
+        <text x="454" y="152" textAnchor="middle" fontSize="11.5" fontWeight="800" fill="#0e7490">转置存储</text>
+
+        {/* ---------- 右：转置后 ---------- */}
+        <text x="530" y="34" fontSize="14" fontWeight="800" fill="#047857">转置后：smem_A_T[8][128] —— reg_A 沿行连续读</text>
+        <text x="530" y="54" fontSize="11" fill="#64748b">加载时把 A[r][c] 写到 smem_A_T[c][r]，计算端就能按行读</text>
+        <rect x={tX} y={tY} width={tW} height={tH} rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+        <MatrixGrid x={tX} y={tY} w={tW} h={tH} rows={8} cols={8} stroke="#a7f3d0"/>
+        <rect x={tX+kk*(tH/8)} y={tY} width={tH/8} height={tH} fill="#10b981" opacity="0.4"/>
+        <rect x={tX+(d.tile_row0/128)*tW} y={tY+kk*(tH/8)} width={(8/128)*tW} height={tH/8}
+              fill="#e11d48" opacity="0.8" className="pulse-soft"/>
+        <text x={tX+tW/2} y={tY+tH+18} textAnchor="middle" fontSize="10.5" fill="#475569">
+          高亮：第 kk={kk} 行的 {d.tile_row0}–{d.tile_row0+7} 列 —— 正好是上面那 8 个单元
+        </text>
+        <text x={tX+tW/2} y={tY-10} textAnchor="middle" fontSize="10" fill="#475569">128 列（原 A 的行号）</text>
+
+        {/* 放大：连续 32B */}
+        <text x="560" y="248" fontSize="11.5" fontWeight="800" fill="#0f172a">地址视图（放大）</text>
+        {Array.from({length:8}).map((_,i)=>(
+          <g key={"zb"+i}>
+            <rect x={560+i*28} y="288" width="26" height="26" rx="4" fill="#d1fae5" stroke="#34d399"/>
+            <text x={573+i*28} y="305" textAnchor="middle" fontSize="9" fill="#065f46">+{i*4}B</text>
+          </g>
+        ))}
+        <rect x="560" y="272" width="108" height="10" rx="5" fill="none" stroke="#0891b2" strokeWidth="2.4"/>
+        <text x="614" y="264" textAnchor="middle" fontSize="9" fontWeight="800" fill="#0e7490">float4 #0</text>
+        <rect x="672" y="272" width="108" height="10" rx="5" fill="none" stroke="#0891b2" strokeWidth="2.4"/>
+        <text x="726" y="264" textAnchor="middle" fontSize="9" fontWeight="800" fill="#0e7490">float4 #1</text>
+        <rect x="560" y="348" width="220" height="30" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/>
+        <text x="670" y="367" textAnchor="middle" fontSize="11" fontWeight="800" fill="#047857">8 个连续 float = 32B → LDS.128 × 2</text>
+      </svg>
+      <div className="grid sm:grid-cols-2 gap-3 mt-2">
+        <div className="rounded-xl bg-rose-50 border border-rose-100 px-3 py-2.5 mono text-[11px] leading-6 text-rose-950">
+          reg_A[i] = smem_A[tile_row0+i][kk];<br/>// 地址 = base + i×BK×4 → 步长 32B
+        </div>
+        <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2.5 mono text-[11px] leading-6 text-emerald-950">
+          float4 v = *(const float4*)&amp;smem_A_T[kk][tile_row0+i];<br/>// 地址连续 → 一条 LDS.128 装 4 个
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 3：A 的 float4 加载 + 转置写
+// =================================================================
+function LoadAPanel({tid, kIndex, playing, phase}) {
+  const active = phase === 0;
+  const aCol4 = tid % A_VEC_COLS;                 // float4 列索引
+  const aRow = Math.floor(tid / A_VEC_COLS);      // 行索引（0..127）
+  const gCol = kIndex*BK + aCol4*4;               // 全局列
+
+  const ovX=30, ovY=64, ovW=176, ovH=192;         // 全局 A 概览（8 列 × 128 行）
+  const zmX=250, zmY=64, cell=26;                 // 放大区
+  const smX=640, smY=96, smW=270, smH=56;         // smem_A_T[8][128]
+
+  return (
+    <div className="grid xl:grid-cols-[minmax(560px,1fr)_320px] gap-5 items-start">
+      <div className="soft-card bg-white p-4 overflow-x-auto scrollbar-thin">
+        <svg viewBox="0 0 940 340" className="w-full min-w-[600px]">
+          <ArrowMarker/>
+          <text x="16" y="26" fontSize="13" fontWeight="800" fill="#0f172a">全局 A 的 128×8 子块 → 一次 LDG.128 → 转置散写进 smem_A_T</text>
+
+          {/* 概览 */}
+          <text x={ovX} y={ovY-8} fontSize="11" fontWeight="700" fill="#1d4ed8">A[global_row0 .. +128, k0 .. +8]</text>
+          <rect x={ovX} y={ovY} width={ovW} height={ovH} rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+          <MatrixGrid x={ovX} y={ovY} w={ovW} h={ovH} rows={8} cols={8} stroke="#bfdbfe"/>
+          <rect x={ovX+aCol4*(ovW/8)*4} y={ovY+(aRow/BM)*ovH} width={(ovW/8)*4} height={Math.max(2,(1/BM)*ovH)}
+                fill="#e11d48" className={active?"pulse-soft":""}/>
+          <rect x={ovX+zmX/2-40} y={ovY+(aRow/BM)*ovH-1} width="80" height="3" fill="#e11d48" opacity="0.9"/>
+          <text x={ovX+ovW/2} y={ovY+ovH+18} textAnchor="middle" fontSize="10" fill="#475569">128 行 × 8 列 · 红线 = 线程 tid={tid} 负责的行</text>
+
+          {/* 放大区：aRow 附近的行 */}
+          <text x={zmX} y={zmY-8} fontSize="11" fontWeight="700" fill="#1d4ed8">放大（第 {aRow} 行附近）</text>
+          {Array.from({length:7}).map((_,i)=>{
+            const r = aRow-3+i;
+            const isSelf = i===3;
+            return (
+              <g key={"zr"+i}>
+                {Array.from({length:8}).map((__,c)=>(
+                  <rect key={c} x={zmX+c*cell} y={zmY+i*22} width={cell-2} height={20} rx="3"
+                        fill={isSelf && c>=aCol4*4 && c<aCol4*4+4 ? "#e11d48" : "#f8fafc"}
+                        stroke={isSelf && c>=aCol4*4 && c<aCol4*4+4 ? "#be123c" : "#e2e8f0"}/>
+                ))}
+                <text x={zmX-8} y={zmY+i*22+14} textAnchor="end" fontSize="8.5" fill="#94a3b8">{r}</text>
+              </g>
+            );
+          })}
+          {["v.x","v.y","v.z","v.w"].map((t,i)=>(
+            <text key={"v"+i} x={zmX+(aCol4*4+i)*cell+(cell-2)/2} y={zmY+3*22+34} textAnchor="middle" fontSize="9" fontWeight="800" fill="#be123c">{t}</text>
+          ))}
+          <rect x={zmX+aCol4*4*cell-3} y={zmY+3*22-3} width={4*cell+2} height={24} rx="6" fill="none" stroke="#0891b2" strokeWidth="2.4"/>
+          <text x={zmX+aCol4*4*cell+2*cell} y={zmY+3*22-10} textAnchor="middle" fontSize="10" fontWeight="800" fill="#0e7490">1 × LDG.128（16B 连续）</text>
+
+          {/* 4 条转置写箭头 */}
+          {["v.x","v.y","v.z","v.w"].map((t,i)=>{
+            const fromX = zmX+(aCol4*4+i)*cell+(cell-2)/2;
+            const fromY = zmY+3*22+44;
+            const toX = smX+(aRow/BM)*smW+1;
+            const toY = smY+(aCol4*4+i)*(smH/8)+(smH/16);
+            return <path key={"ta"+i} d={`M${fromX} ${fromY} C${fromX} ${fromY+50}, ${toX-80} ${toY}, ${toX-4} ${toY}`}
+                         fill="none" stroke="#0891b2" strokeWidth="2" markerEnd="url(#arrowCyan)"
+                         className={active&&playing?"flow-line":""} opacity={active?1:.35}/>;
+          })}
+          <text x="500" y="316" fontSize="10.5" fill="#0e7490" fontWeight="700">4 条 STS.32：smem_A_T[a_col4×4+t][a_row] = v.{["x","y","z","w"][0]}, …（转置散写）</text>
+
+          {/* smem_A_T */}
+          <text x={smX} y={smY-10} fontSize="11" fontWeight="700" fill="#047857">smem_A_T[8][128]（转置布局）</text>
+          <rect x={smX} y={smY} width={smW} height={smH} rx="8" fill="#ecfdf5" stroke="#6ee7b7"/>
+          <MatrixGrid x={smX} y={smY} w={smW} h={smH} rows={8} cols={8} stroke="#a7f3d0"/>
+          {Array.from({length:4}).map((_,i)=>(
+            <circle key={"sm"+i} cx={smX+(aRow+0.5)/BM*smW} cy={smY+(aCol4*4+i+0.5)*(smH/8)} r="3.4" fill="#e11d48"/>
+          ))}
+          <text x={smX+smW/2} y={smY+smH+18} textAnchor="middle" fontSize="10" fill="#475569">红点 = v.x…v.w 的落点：同一列（行号 {aRow}）、4 个不同行</text>
+        </svg>
+      </div>
+
+      <div className="space-y-3">
+        <div className="soft-card bg-white p-4">
+          <div className="font-extrabold text-slate-900">线程映射（加载专用）</div>
+          <div className="mt-2 rounded-xl bg-slate-50 border px-3 py-2.5 mono text-xs leading-6">
+            A_VEC_COLS = BK/4 = 2<br/>
+            a_col4 = tid % 2 = <b>{aCol4}</b><br/>
+            a_row = tid / 2 = <b>{aRow}</b><br/>
+            A_ROWS_PER_PASS = 256/2 = <b>128</b>
+          </div>
+          <div className="mt-3 text-xs leading-6 text-slate-600">
+            每轮 128 个线程各管一行，128 行一轮铺满 → 步进循环 <span className="mono">r += 128</span> 只执行一次。
+            本线程读 <span className="mono">A[row0+{aRow}][k0+{gCol%8} … k0+{gCol%8+3}]</span>（tid={tid} 示例）。
+          </div>
+        </div>
+        <div className="soft-card bg-white p-4 text-xs leading-6 text-slate-600">
+          <div className="font-extrabold text-slate-900 mb-2">合并访问形状</div>
+          相邻 2 个 lane（同行的两个 float4 列）覆盖同一行 32B 连续区间；
+          不同行之间不连续，但 BK=8 → 每行段正好 32B，<b>扇区无浪费</b>。
+          相比标量版（每 lane 4B），单指令搬运量 ×4。
+        </div>
+        <div className="rounded-xl bg-amber-50 border border-amber-100 px-3 py-2.5 text-xs leading-6 text-amber-950">
+          <b>边界 fallback：</b>当 <span className="mono">global_col+3 ≥ K</span> 等越界时，退回 4 次标量读 + 逐元素判零写入，保证正确性。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 4：B 的 float4 加载（读写两端都向量化）
+// =================================================================
+function LoadBPanel({tid, kIndex, playing, phase}) {
+  const active = phase === 1;
+  const bCol4 = tid % B_VEC_COLS;
+  const bRow = Math.floor(tid / B_VEC_COLS);   // 0..7
+  const gCol = bCol4*4;
+
+  const gX=30, gY=84, gW=480, gH=56;
+  const sX=580, sY=84, sW=330, sH=56;
+
+  return (
+    <div className="grid xl:grid-cols-[minmax(560px,1fr)_320px] gap-5 items-start">
+      <div className="soft-card bg-white p-4 overflow-x-auto scrollbar-thin">
+        <svg viewBox="0 0 940 230" className="w-full min-w-[600px]">
+          <ArrowMarker/>
+          <text x="16" y="26" fontSize="13" fontWeight="800" fill="#0f172a">全局 B 的 8×128 子块 → LDG.128 → STS.128（布局不变，读写都连续）</text>
+
+          {/* 全局 B */}
+          <text x={gX} y={gY-10} fontSize="11" fontWeight="700" fill="#047857">B[k0 .. k0+8, global_col0 .. +128]</text>
+          <rect x={gX} y={gY} width={gW} height={gH} rx="8" fill="#ecfdf5" stroke="#6ee7b7"/>
+          <MatrixGrid x={gX} y={gY} w={gW} h={gH} rows={8} cols={8} stroke="#a7f3d0"/>
+          <rect x={gX} y={gY+bRow*(gH/8)} width={gW} height={gH/8} fill="#10b981" opacity="0.30"
+                className={active&&playing?"pulse-soft":""}/>
+          <rect x={gX+gCol*(gW/128)} y={gY+bRow*(gH/8)} width={4*(gW/128)} height={gH/8}
+                fill="#e11d48" opacity="0.85"/>
+          {/* warp 括号 */}
+          <path d={`M${gX} ${gY-16} L${gX} ${gY-8} L${gX+gW} ${gY-8} L${gX+gW} ${gY-16}`} fill="none" stroke="#059669" strokeWidth="2"/>
+          <text x={gX+gW/2} y={gY-22} textAnchor="middle" fontSize="10" fontWeight="800" fill="#047857">
+            一个 warp = 第 {bRow} 行的 32 个 float4 = 512B 连续 → 4×128B 完美合并
+          </text>
+          <text x={gX+gW/2} y={gY+gH+18} textAnchor="middle" fontSize="10" fill="#475569">红块 = 线程 tid={tid} 的 float4（行 {bRow}，列 {gCol}–{gCol+3}）</text>
+
+          <path d={`M${gX+gW+8} ${gY+gH/2} C${gX+gW+40} ${gY+gH/2}, ${sX-40} ${gY+gH/2}, ${sX-6} ${gY+gH/2}`}
+                fill="none" stroke="#059669" strokeWidth="2.6" markerEnd="url(#arrowGreen)"
+                className={active&&playing?"flow-line":""} opacity={active?1:.35}/>
+          <text x={(gX+gW+sX)/2} y={gY+gH/2-10} textAnchor="middle" fontSize="10" fontWeight="800" fill="#047857">STS.128</text>
+
+          {/* smem_B */}
+          <text x={sX} y={gY-10} fontSize="11" fontWeight="700" fill="#047857">smem_B[8][128]（原始行主序）</text>
+          <rect x={sX} y={gY} width={sW} height={gH} rx="8" fill="#d1fae5" stroke="#34d399"/>
+          <MatrixGrid x={sX} y={gY} w={sW} h={gH} rows={8} cols={8} stroke="#6ee7b7"/>
+          <rect x={sX+gCol*(sW/128)} y={gY+bRow*(gH/8)} width={4*(sW/128)} height={gH/8} fill="#059669" opacity="0.8"/>
+          <text x={sX+sW/2} y={gY+gH+18} textAnchor="middle" fontSize="10" fill="#475569">一次 128-bit 写入，落点连续 —— 无需任何重排</text>
+        </svg>
+      </div>
+
+      <div className="space-y-3">
+        <div className="soft-card bg-white p-4">
+          <div className="font-extrabold text-slate-900">线程映射（加载专用）</div>
+          <div className="mt-2 rounded-xl bg-slate-50 border px-3 py-2.5 mono text-xs leading-6">
+            B_VEC_COLS = BN/4 = 32<br/>
+            b_col4 = tid % 32 = <b>{bCol4}</b><br/>
+            b_row = tid / 32 = <b>{bRow}</b><br/>
+            B_ROWS_PER_PASS = 256/32 = <b>8</b>
+          </div>
+          <div className="mt-3 text-xs leading-6 text-slate-600">
+            每轮 256 线程 = 8 行 × 32 段，一轮铺满 8×128 → 循环同样只执行一次。
+            与标量版 <span className="mono">load_tile_B</span> 的 8×32 网格完全同构，只是每个「格」从 1 个 float 变成 1 个 float4。
+          </div>
+        </div>
+        <div className="soft-card bg-white p-4 text-xs leading-6 text-slate-600">
+          <div className="font-extrabold text-slate-900 mb-2">为什么 B 不用转置</div>
+          计算端读 <span className="mono">smem_B[kk][tile_col0+j…]</span> 沿行方向连续；
+          加载端写也是行方向连续 —— 两端天然对齐，float4 直接套用。
+          A 的问题只出在计算端要读「列」，所以只需转置 A。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 5：计算期 —— LDS.128 装载 reg_A / reg_B + 外积
+// =================================================================
+function ComputePanel({kk, sub, tid, kIndex, kDone, playing}) {
+  const d = decompose(tid);
+  const kG = kIndex*8 + kk;
+
+  const accum = useMemo(()=>{
+    const out = [];
+    for (let i=0;i<8;i++){
+      const line = [];
+      for (let j=0;j<8;j++){
+        let s = 0;
+        for (let k=0;k<kDone;k++) s += AVAL(d.tile_row0+i, k) * BVAL(k, d.tile_col0+j);
+        line.push(s);
+      }
+      out.push(line);
+    }
+    return out;
+  }, [kDone, d.tile_row0, d.tile_col0]);
+
+  const atX=16, atY=44, atW=320, atH=44;   // smem_A_T
+  const raX=16, raY=150, raW=320;          // reg_A
+  const acX=400, acY=44, acS=30;           // accum
+  const rbX=400, rbY=330, rbW=240;         // reg_B
+  const bX=16, bY=330, bW=320, bH=44;      // smem_B
+
+  return (
+    <div className="grid xl:grid-cols-[minmax(560px,1fr)_300px] gap-4 items-start">
+      <div className="rounded-2xl border border-slate-200 bg-white p-3 overflow-x-auto scrollbar-thin">
+        <svg viewBox="0 0 700 414" className="w-full min-w-[620px]">
+          <ArrowMarker/>
+          <text x={atX+atW/2} y="28" textAnchor="middle" fontSize="12" fontWeight="800" fill="#047857">smem_A_T[8][128]（转置）</text>
+          <rect x={atX} y={atY} width={atW} height={atH} rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+          <MatrixGrid x={atX} y={atY} w={atW} h={atH} rows={8} cols={8} stroke="#a7f3d0"/>
+          <rect x={atX} y={atY+kk*(atH/8)} width={atW} height={atH/8} fill="#10b981" opacity="0.4"
+                className={sub===0&&playing?"pulse-soft":""}/>
+          <rect x={atX+(d.tile_row0/128)*atW} y={atY+kk*(atH/8)} width={(8/128)*atW} height={atH/8} fill="#e11d48" opacity="0.8"/>
+          <text x={atX+atW/2} y={atY+atH+16} textAnchor="middle" fontSize="9.5" fill="#475569">第 kk={kk} 行 · 本 lane 的 8 列（{d.tile_row0}–{d.tile_row0+7}）连续</text>
+
+          {/* smem_A_T -> reg_A */}
+          <path d={`M${atX+294} ${atY+atH+4} L${atX+294} ${raY-6}`} fill="none" stroke="#0891b2" strokeWidth="2.6"
+                markerEnd="url(#arrowCyan)" className={sub===0&&playing?"flow-line":""} opacity={sub===0?1:.3}/>
+          <text x={atX+302} y={(atY+atH+raY)/2+4} fontSize="9.5" fontWeight="800" fill="#0e7490">2 × LDS.128</text>
+
+          {/* reg_A */}
+          <text x={atX} y={raY-8} fontSize="12" fontWeight="800" fill="#be123c">reg_A[8]（两个 float4 组）</text>
+          {Array.from({length:8}).map((_,i)=>(
+            <g key={"ra"+i}>
+              <rect x={raX+i*40} y={raY} width={38} height="34" rx="5"
+                    fill={sub>=1?"#ffe4e6":"#f8fafc"} stroke={sub>=1?"#fb7185":"#e2e8f0"} strokeWidth="1.2"/>
+              <text x={raX+i*40+19} y={raY+21} textAnchor="middle" fontSize="11" fontWeight="800"
+                    fill={sub>=1?"#be123c":"#cbd5e1"}>{sub>=1?AVAL(d.tile_row0+i,kG):"?"}</text>
+            </g>
+          ))}
+          {[0,4].map((s,i)=>(
+            <g key={"fa"+i}>
+              <rect x={raX+s*40-2} y={raY-4} width={154} height={42} rx="8" fill="none" stroke="#0891b2" strokeWidth="2"/>
+              <text x={raX+s*40+75} y={raY+52} textAnchor="middle" fontSize="9" fontWeight="800" fill="#0e7490">float4 #{i}</text>
+            </g>
+          ))}
+
+          {/* reg_A -> accum */}
+          <path d={`M${raX+raW+8} ${raY+17} C${acX-40} ${raY+17}, ${acX-30} ${acY+120}, ${acX-6} ${acY+120}`}
+                fill="none" stroke="#e11d48" strokeWidth="2.6" markerEnd="url(#arrowRose)"
+                className={sub===2&&playing?"flow-line":""} opacity={sub===2?1:.3}/>
+          <text x={acX-42} y={acY+100} fontSize="15" fontWeight="900" fill="#7c3aed" textAnchor="middle">⊗</text>
+
+          {/* accum */}
+          <text x={acX+120} y="28" textAnchor="middle" fontSize="12" fontWeight="800" fill="#be123c">accum[8][8]</text>
+          {accum.flatMap((line,i)=>line.map((v,j)=>(
+            <g key={"ac"+i+"-"+j}>
+              <rect x={acX+j*acS+1} y={acY+i*acS+1} width={acS-3} height={acS-3} rx="4"
+                    fill={(i===2||j===3)?"#ffe4e6":"#fff1f2"} stroke={(i===2||j===3)?"#fb7185":"#fecdd3"}
+                    opacity={sub===2?(0.6+(((i+j+kk)%3)*0.13)):0.92}
+                    className={sub===2&&playing?"pulse-soft":""}/>
+              <text x={acX+j*acS+15} y={acY+i*acS+19} textAnchor="middle" fontSize="8.5" fontWeight="700" fill="#9f1239">{v}</text>
+            </g>
+          )))}
+          <rect x={acX+3*acS+1} y={acY+2*acS+1} width={acS-3} height={acS-3} rx="4" fill="none" stroke="#be123c" strokeWidth="2"/>
+
+          {/* reg_B -> accum */}
+          <path d={`M${rbX+230} ${rbY-6} L${rbX+230} ${acY+246}`} fill="none" stroke="#059669" strokeWidth="2.6"
+                markerEnd="url(#arrowGreen)" className={sub===2&&playing?"flow-line":""} opacity={sub===2?1:.3}/>
+
+          {/* reg_B */}
+          <text x={rbX} y={rbY-8} fontSize="12" fontWeight="800" fill="#047857">reg_B[8]（两个 float4 组）</text>
+          {Array.from({length:8}).map((_,j)=>(
+            <g key={"rb"+j}>
+              <rect x={rbX+j*30} y={rbY} width={28} height="34" rx="5"
+                    fill={sub===2?"#d1fae5":"#f8fafc"} stroke={sub===2?"#34d399":"#e2e8f0"} strokeWidth="1.2"
+                    className={sub===1&&playing?"pulse-soft":""}/>
+              <text x={rbX+j*30+14} y={rbY+21} textAnchor="middle" fontSize="10.5" fontWeight="800"
+                    fill={sub===2?"#047857":"#cbd5e1"}>{sub===2?BVAL(kG,d.tile_col0+j):"?"}</text>
+            </g>
+          ))}
+          {[0,4].map((s,i)=>(
+            <rect key={"fb"+i} x={rbX+s*30-2} y={rbY-4} width={116} height={42} rx="8" fill="none" stroke="#0891b2" strokeWidth="2"/>
+          ))}
+
+          {/* smem_B -> reg_B */}
+          <path d={`M${bX+bW+8} ${bY+22} C${rbX-40} ${bY+22}, ${rbX-30} ${rbY+17}, ${rbX-6} ${rbY+17}`}
+                fill="none" stroke="#059669" strokeWidth="2.6" markerEnd="url(#arrowGreen)"
+                className={sub===1&&playing?"flow-line":""} opacity={sub===1?1:.3}/>
+          <text x={rbX-52} y={rbY-2} fontSize="9.5" fontWeight="800" fill="#047857">2 × LDS.128</text>
+
+          {/* smem_B */}
+          <text x={bX+bW/2} y={bY-8} textAnchor="middle" fontSize="12" fontWeight="800" fill="#047857">smem_B[8][128]</text>
+          <rect x={bX} y={bY} width={bW} height={bH} rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+          <MatrixGrid x={bX} y={bY} w={bW} h={bH} rows={8} cols={8} stroke="#a7f3d0"/>
+          <rect x={bX} y={bY+kk*(bH/8)} width={bW} height={bH/8} fill="#10b981" opacity="0.4"
+                className={sub===1&&playing?"pulse-soft":""}/>
+          <rect x={bX+(d.tile_col0/128)*bW} y={bY+kk*(bH/8)} width={(8/128)*bW} height={bH/8} fill="#e11d48" opacity="0.8"/>
+          <text x={bX+bW/2} y={bY+bH+16} textAnchor="middle" fontSize="9.5" fill="#475569">第 kk={kk} 行 · 本 lane 的 8 列（{d.tile_col0}–{d.tile_col0+7}）连续</text>
+        </svg>
+      </div>
+
+      <div className="space-y-3">
+        <div className="soft-card bg-white p-4">
+          <div className="text-xs text-slate-500">当前线程</div>
+          <div className="mono text-sm font-bold mt-1">tid={tid} → warp {decompose(tid).warp_id} / lane {decompose(tid).lane_id}</div>
+          <div className="text-xs text-slate-500 mt-3">当前步</div>
+          <div className="text-sm font-bold text-cyan-700 mt-1 leading-6">
+            {sub===0 && <>① 2× LDS.128 ← smem_A_T[kk][…]<br/><span className="text-slate-500 font-normal">16B 连续 —— 转置带来的资格</span></>}
+            {sub===1 && <>② 2× LDS.128 ← smem_B[kk][…]<br/><span className="text-slate-500 font-normal">天然连续</span></>}
+            {sub===2 && <>③ 64 次 FMA<br/><span className="text-slate-500 font-normal">与 warp tiling 完全相同</span></>}
+          </div>
+        </div>
+        <div className="soft-card bg-white p-4">
+          <div className="flex items-end justify-between">
+            <div>
+              <div className="text-xs text-slate-500">BK 进度</div>
+              <div className="text-2xl font-black text-rose-600">{kk+1}/8</div>
+            </div>
+            <div className="text-right text-xs text-slate-500 leading-5">
+              每 kk：4 条 LDS.128<br/>（16 float）· 64 FMA
+            </div>
+          </div>
+          <div className="mt-3"><ProgressBar value={((sub===2?kk+1:kk)/8)*100} color="bg-rose-500"/></div>
+        </div>
+        <div className="rounded-xl bg-cyan-50 border border-cyan-100 px-3 py-3 text-xs leading-6 text-cyan-950">
+          广播依然生效：reg_A 的一条 LDS.128 内，同一 lane_grid_row 的 8 个 lane 读同一 16B → 广播；
+          reg_B 的 8 个 lane 读 8 个连续 float4 → 无冲突。向量化与广播在这里同时兑现。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 6：汇总表
+// =================================================================
+function SummaryTable() {
+  const rows = [
+    ["全局读取（每 block·每 K tile）", "2048 × LDG.32", "512 × LDG.128", "↓4×"],
+    ["共享写入", "2048 × STS.32", "1024 STS.32 + 256 STS.128", "↓1.6×"],
+    ["计算期 smem 读取（每线程·每 K tile）", "128 × LDS.32", "32 × LDS.128", "↓4×"],
+    ["访存字节数", "相同", "相同", "0"],
+    ["warp 算术强度", "10.67 F/B", "10.67 F/B", "0"],
+  ];
+  return (
+    <div className="overflow-x-auto scrollbar-thin">
+      <table className="w-full text-sm min-w-[560px]">
+        <thead>
+          <tr className="text-left text-xs text-slate-500 border-b-2">
+            <th className="py-2.5">指标</th>
+            <th className="py-2.5">warp tiling（标量）</th>
+            <th className="py-2.5">vec4 版本（本篇）</th>
+            <th className="py-2.5 text-right">变化</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r,i)=>(
+            <tr key={i} className="border-b border-slate-100">
+              <td className="py-2.5 font-semibold text-slate-700">{r[0]}</td>
+              <td className="py-2.5 mono text-slate-500">{r[1]}</td>
+              <td className="py-2.5 mono font-bold text-violet-700">{r[2]}</td>
+              <td className={`py-2.5 text-right font-black mono ${r[3]==="0"?"text-slate-400":"text-cyan-700"}`}>{r[3]}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="mt-3 text-xs leading-6 text-slate-500">
+        计算期读取的每线程口径：8 kk × (8+8) float；LDS.128 每次 4 float，所以 128 条 → 32 条。
+        字节与算术强度不变 —— vec4 的收益全部来自「指令更少」与「reg_A 得以向量化」。
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// App
+// =================================================================
+function App(){
+  const [playing,setPlaying]=useState(true);
+  const [speed,setSpeed]=useState(1);
+  const [demoK,setDemoK]=useState(64);
+  const tiles = demoK/8;
+  const [kIndex,setKIndex]=useState(0);
+  const [step,setStep]=useState(0);   // 0 载A, 1 载B, 2 屏障, 3..26 计算, 27 推进
+  const [tid,setTid]=useState(37);
+  const timer=useRef(null);
+
+  const inCompute = step>=3 && step<=26;
+  const kk = inCompute ? Math.floor((step-3)/3) : 0;
+  const sub = inCompute ? (step-3)%3 : 0;
+  const phase = step===0 ? 0 : step===1 ? 1 : step===2 ? 2 : inCompute ? 3 : 4;
+  const kkDone = step>=27 ? 8 : inCompute ? kk + (sub===2?1:0) : 0;
+  const accumulation = Math.min(100, ((kIndex + kkDone/8)/tiles)*100);
+
+  function nextStep(){
+    if(step<27){ setStep(step+1); return; }
+    setStep(0);
+    if(kIndex<tiles-1) setKIndex(kIndex+1);
+    else { setKIndex(0); setPlaying(false); }
+  }
+  function reset(){ setPlaying(false); setKIndex(0); setStep(0); }
+
+  useEffect(()=>{
+    if(!playing) return;
+    const ms = Math.max(140, 650/speed);
+    timer.current=setTimeout(nextStep, ms);
+    return ()=>clearTimeout(timer.current);
+  },[playing, speed, step, kIndex, tiles]);
+
+  return (
+    <main className="max-w-[1480px] mx-auto px-4 sm:px-6 py-7 sm:py-10">
+
+      <header className="mb-6">
+        <div className="card relative overflow-hidden p-6 sm:p-9">
+          <div className="pointer-events-none absolute -top-28 -right-24 w-80 h-80 rounded-full bg-gradient-to-br from-cyan-200/45 to-blue-200/40 blur-3xl"/>
+          <div className="pointer-events-none absolute -bottom-32 -left-20 w-72 h-72 rounded-full bg-gradient-to-tr from-violet-200/35 to-cyan-200/30 blur-3xl"/>
+          <div className="relative flex flex-col xl:flex-row xl:items-end xl:justify-between gap-6">
+            <div>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <Pill color="cyan">float4 = 128 bit</Pill>
+                <Pill color="blue">LDG.128 / STS.128 / LDS.128</Pill>
+                <Pill color="green">smem_A_T[BK][BM] 转置</Pill>
+                <Pill color="purple">smem_B[BK][BN] 原序</Pill>
+                <Pill color="slate">warp 4×8 层级不变</Pill>
+              </div>
+              <h1 className="text-3xl sm:text-[2.5rem] font-black tracking-tight text-slate-950 leading-tight">
+                CUDA GEMM：float4 向量化 + 共享内存转置 动图解
+              </h1>
+              <p className="mt-3 text-slate-600 max-w-4xl leading-7">
+                对应 <span className="mono font-semibold">matmul_vec.cuh</span>。在 warp tiling 之上做三件事：
+                全局加载改用 <span className="mono">float4</span>（指令数 ÷4）；A 在共享内存中<b>转置存储</b>，让计算期
+                <span className="mono"> reg_A</span> 的读取从跨行 32B 步长变成连续 32B，从而也能 <span className="mono">LDS.128</span>；
+                B 布局不动、读写两端都向量化。访存字节数与算术强度不变 —— 赚的是指令与发射压力。
+              </p>
+            </div>
+            <div className="text-sm text-slate-500 xl:text-right shrink-0">
+              <div>单页交互演示 · React + Tailwind CSS + SVG</div>
+              <div className="mt-1">前置知识：<a className="text-blue-600 font-semibold hover:underline" href="./gemm_warp_tiling_interactive.html">Warp 级 Tiling</a></div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section className="glass-bar rounded-2xl p-4 sm:p-5 sticky top-3 z-20 mb-6">
+        <div className="flex flex-col xl:flex-row xl:items-center gap-4 xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={()=>setPlaying(!playing)} className={`btn ${playing?"btn-dark":"btn-blue"}`}>
+              {playing ? "暂停" : "播放"}
+            </button>
+            <button onClick={()=>{setPlaying(false);nextStep();}} className="btn btn-ghost">单步执行</button>
+            <button onClick={reset} className="btn btn-ghost">重置</button>
+            <div className="hidden sm:block w-px h-8 bg-slate-200 mx-1"/>
+            <PhaseBadge phase={phase} kk={kk} sub={sub}/>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <label className="flex items-center gap-2">
+              <span className="text-slate-500">演示 K</span>
+              <select value={demoK} onChange={e=>{setPlaying(false);setDemoK(Number(e.target.value));setKIndex(0);setStep(0);}}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 font-semibold">
+                <option value="32">32</option>
+                <option value="64">64</option>
+                <option value="128">128</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="text-slate-500">速度</span>
+              <input type="range" min=".5" max="3" step=".5" value={speed}
+                     onChange={e=>setSpeed(Number(e.target.value))} className="accent-cyan-600"/>
+              <span className="w-8 font-bold">{speed}×</span>
+            </label>
+            <div className="text-right">
+              <div className="text-xs text-slate-500">C tile 累计进度</div>
+              <div className="font-black text-cyan-700 leading-5">{Math.round(accumulation)}%</div>
+            </div>
+          </div>
+        </div>
+        <div className="hairline my-4"/>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-bold text-slate-400 shrink-0">K 时间轴</span>
+          <KTimeline tiles={tiles} kIndex={kIndex} setKIndex={(i)=>{setPlaying(false);setKIndex(i);setStep(0);}}/>
+        </div>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="1" title="先看总账：指令数对比" right={<Pill color="cyan">每 block · 每 K tile</Pill>}>
+          三类访存指令在标量版与 vec4 版之间的数量对比。字节不变，指令变少 —— 这就是向量化的全部收益来源。
+        </SecTitle>
+        <InstrCompare/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="2" title="转置的故事：布局决定能否向量化"
+          right={<div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+            <span className="text-sm text-slate-500">tid</span>
+            <input type="range" min="0" max="255" value={tid} onChange={e=>setTid(Number(e.target.value))} className="accent-cyan-600 w-32"/>
+            <Pill color="purple">{tid}</Pill>
+          </div>}>
+          同样 8 个数，旧布局要 8 条 LDS.32（地址步长 32B），转置后只要 2 条 LDS.128（连续 32B）—— 这就是引入 smem_A_T 的全部理由。
+        </SecTitle>
+        <TransposeStory tid={tid} kIndex={kIndex}/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="3" title="加载 A：一次 LDG.128，转置散写"
+          right={<div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+            <span className="text-sm text-slate-500">tid</span>
+            <input type="range" min="0" max="255" value={tid} onChange={e=>setTid(Number(e.target.value))} className="accent-cyan-600 w-32"/>
+            <Pill color="purple">{tid}</Pill>
+          </div>}>
+          播放到「向量加载 A」阶段可看到读写动画：每个线程读 16B 连续，把 v.x…v.w 写到 smem_A_T 的 4 个不同行。
+        </SecTitle>
+        <LoadAPanel tid={tid} kIndex={kIndex} playing={playing} phase={phase}/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="4" title="加载 B：读写两端都连续，一次到位">
+          B 保持行主序：加载端写连续（STS.128），计算端读也连续 —— 一个 warp 恰好覆盖一整行 512B。
+        </SecTitle>
+        <LoadBPanel tid={tid} kIndex={kIndex} playing={playing} phase={phase}/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="5" title="计算期：LDS.128 装载片段 → 寄存器外积">
+          线程层级与外积循环同 warp tiling；区别只是 reg_A / reg_B 的装载从标量变成 float4。accum 数字为真实累加值。
+        </SecTitle>
+        <ComputePanel kk={kk} sub={sub} tid={tid} kIndex={kIndex} kDone={kIndex*8+kkDone} playing={playing}/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="6" title="汇总：vec4 版本 vs warp tiling">
+          每一条变化都能对应到代码里的具体改动：加载循环的 float4 化、smem_A_T 的引入、计算期读取向量化。
+        </SecTitle>
+        <SummaryTable/>
+      </section>
+
+      <section className="grid lg:grid-cols-3 gap-4">
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="cyan">①</Pill><h3 className="font-black tracking-tight">少的是指令，不是字节</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            LDG / LDS 指令数 ÷4，STS ÷1.6。当 kernel 受访存指令发射（LSU/MIO）限制时，
+            这些省下的发射槽直接转化为 FMA 的发射空间 —— 带宽不变，吞吐上升。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="green">②</Pill><h3 className="font-black tracking-tight">转置是一次性布局投资</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            加载端为 A 付出 4 条散写 STS.32，换来计算端每个 kk 的 2 条 LDS.128。
+            每个 K tile 里 A 列被读 8 次（kk=0..7）、写 1 次 —— 以一次写端代价换八次读端收益。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="orange">③</Pill><h3 className="font-black tracking-tight">还有两处没向量化</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            A 的转置写（散写无法成 float4）和最终写回 C（仍是标量 STG）。
+            前者受布局本质限制，后者是下一步明确可做的优化（tile_col0 8 对齐 → 16B 对齐成立）。
+          </p>
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950 leading-6">
+        <b>准确性细节：</b>
+        ① <b>对齐假设</b>：float4 要求 16B 对齐。A 的行首地址 = r×K、B 的行首 = r×N，因此隐式要求 K、N 是 4 的倍数；
+        代码的边界 fallback 只处理越界、不处理非对齐 —— 实践中应把 K/N pad 到 4 的倍数（或用 <span className="mono">cudaMallocPitch</span>）。
+        ② <b>A 转置写有 2-way bank conflict</b>：同一条 STS.32 中相邻两个 lane（同一行的两个 float4 列）写入的地址相差
+        4×BM = 512 float ≡ 0（mod 32 bank），落进同一 bank；可用 padding 或 Z-order 映射消除（另见 <span className="mono">matmul_bank.cuh</span>）。
+        ③ 计算期无冲突：reg_A 的 LDS.128 内同一 lane 行的 8 个 lane 地址相同（广播）；reg_B 的 8 个连续 float4 恰好覆盖 32 个 bank。
+      </section>
+
+      <footer className="py-10 text-center text-xs text-slate-400">
+        CUDA GEMM Vectorized · Interactive Teaching Diagram ·
+        代码 <span className="mono">matmul_vec.cuh</span> · 笔记 note.md §7 ·
+        系列：<a className="hover:underline" href="./gemm_block_tiling_interactive.html">Block Tiling</a> →
+        <a className="hover:underline" href="./gemm_thread_tiling_interactive.html"> Thread Tiling</a> →
+        <a className="hover:underline" href="./gemm_warp_tiling_interactive.html"> Warp Tiling</a> →
+        <a className="hover:underline" href="./gemm_vectorized_interactive.html"> float4</a>
+      </footer>
+    </main>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

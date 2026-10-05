@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CUDA GEMM Warp 级 Tiling（广播复用）- Interactive</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(1100px 540px at 6% -8%, rgba(16,185,129,.10), transparent 62%),
+        radial-gradient(900px 480px at 98% 2%, rgba(59,130,246,.09), transparent 60%),
+        radial-gradient(900px 560px at 50% 108%, rgba(124,58,237,.08), transparent 62%),
+        #f7f9fc;
+      color: #0f172a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      background: rgba(255,255,255,.92);
+      border: 1px solid rgba(226,232,240,.95);
+      border-radius: 22px;
+      box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 16px 36px -16px rgba(15,23,42,.16);
+      backdrop-filter: blur(8px);
+      transition: box-shadow .25s ease, transform .25s ease;
+    }
+    .card:hover { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 22px 46px -18px rgba(15,23,42,.22); }
+    .soft-card {
+      border-radius: 18px;
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 1px 2px rgba(15,23,42,.04);
+      transition: box-shadow .2s ease, transform .2s ease;
+    }
+    .soft-card:hover { box-shadow: 0 8px 22px -12px rgba(15,23,42,.28); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .flow-line { stroke-dasharray: 9 8; animation: dash 1.0s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -34; } }
+    .pulse-soft { animation: pulseSoft 1.1s ease-in-out infinite; }
+    @keyframes pulseSoft {
+      0%,100% { opacity: .45; filter: drop-shadow(0 0 0 rgba(59,130,246,0)); }
+      50% { opacity: 1; filter: drop-shadow(0 0 8px rgba(59,130,246,.35)); }
+    }
+    .compute-glow { animation: computeGlow .9s ease-in-out infinite; }
+    @keyframes computeGlow {
+      0%,100% { filter: drop-shadow(0 0 0 rgba(244,63,94,0)); }
+      50% { filter: drop-shadow(0 0 11px rgba(244,63,94,.55)); }
+    }
+    .num-badge {
+      width: 2.15rem; height: 2.15rem;
+      border-radius: .85rem;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-weight: 900; color: #fff; font-size: .95rem;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      box-shadow: 0 8px 16px -8px rgba(37,99,235,.9);
+      flex: none;
+    }
+    .glass-bar {
+      background: rgba(255,255,255,.82);
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 10px 30px -18px rgba(15,23,42,.35);
+      backdrop-filter: blur(14px);
+    }
+    .btn {
+      border-radius: 12px; font-weight: 700; font-size: .875rem;
+      padding: .5rem .95rem;
+      transition: all .18s ease;
+      box-shadow: 0 1px 2px rgba(15,23,42,.06);
+    }
+    .btn-ghost { background: #fff; border: 1px solid #e2e8f0; color: #334155; }
+    .btn-ghost:hover { background: #f8fafc; border-color: #cbd5e1; transform: translateY(-1px); }
+    .btn-dark { background: #0f172a; color: #fff; border: 1px solid #0f172a; }
+    .btn-dark:hover { transform: translateY(-1px); box-shadow: 0 8px 18px -10px rgba(15,23,42,.9); }
+    .btn-blue { background: linear-gradient(135deg,#2563eb,#3b82f6); color: #fff; border: 1px solid #2563eb; }
+    .btn-blue:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -10px rgba(37,99,235,.9); }
+    .chip {
+      border-radius: 12px; font-size: .72rem; font-weight: 800;
+      padding: .4rem .7rem; border: 1px solid #e2e8f0; background: #fff; color: #64748b;
+      transition: all .18s ease; white-space: nowrap;
+    }
+    .chip:hover { border-color: #93c5fd; color: #1d4ed8; }
+    .chip-done { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    .chip-now {
+      background: linear-gradient(135deg,#2563eb,#3b82f6);
+      border-color: #2563eb; color: #fff;
+      box-shadow: 0 8px 16px -8px rgba(37,99,235,.9);
+    }
+    input[type="range"] { height: 1.25rem; }
+    .scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 3px solid rgba(59,130,246,.25);
+      outline-offset: 2px;
+    }
+    .hairline { height: 1px; background: linear-gradient(to right, transparent, #e2e8f0 20%, #e2e8f0 80%, transparent); }
+    svg text { user-select: none; }
+  </style>
+</head>
+
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useEffect, useMemo, useRef, useState } = React;
+
+// -----------------------------------------------------------------
+// 与 matmul_warp.cuh 一致的编译期常量
+//   BLOCK 128×128, BK=8, warp 内 lane 排布 4×8, lane tile 8×8
+//   → warp tile 32×64, warp 网格 4×2 = 8 warp = 256 线程
+// -----------------------------------------------------------------
+const BM = 128, BN = 128, BK = 8;
+const WARP_M = 4, WARP_N = 8, TM = 8, TN = 8;
+const WARP_TILE_M = WARP_M * TM;   // 32
+const WARP_TILE_N = WARP_N * TN;   // 64
+const WARPS_M = BM / WARP_TILE_M;  // 4
+const WARPS_N = BN / WARP_TILE_N;  // 2
+const THREADS = WARPS_M * WARPS_N * 32; // 256
+
+const AVAL = (r, c) => ((r * 7 + c * 3) % 9) + 1;
+const BVAL = (r, c) => ((r * 5 + c * 2) % 9) + 1;
+
+// 广播组的配色：填充 = reg_A 广播组（4 组），描边 = reg_B 组播组（8 组）
+const ROW_FILL  = ["#bfdbfe", "#a7f3d0", "#fde68a", "#fbcfe8"];
+const ROW_FILL2 = ["#bfdbfe", "#fde68a"]; // thread tiling 映射只有 2 组
+const COL_STROKE = ["#1d4ed8", "#047857", "#b45309", "#be123c", "#6d28d9", "#0e7490", "#a21caf", "#4d7c0f"];
+
+function decompose(tid) {
+  const warp_id = Math.floor(tid / 32);
+  const lane_id = tid % 32;
+  const warp_grid_row = Math.floor(warp_id / WARPS_N);
+  const warp_grid_col = warp_id % WARPS_N;
+  const lane_grid_row = Math.floor(lane_id / WARP_N);
+  const lane_grid_col = lane_id % WARP_N;
+  const tile_row0 = (warp_grid_row * WARP_M + lane_grid_row) * TM;
+  const tile_col0 = (warp_grid_col * WARP_N + lane_grid_col) * TN;
+  return {warp_id, lane_id, warp_grid_row, warp_grid_col, lane_grid_row, lane_grid_col, tile_row0, tile_col0};
+}
+
+function MatrixGrid({x, y, w, h, rows=8, cols=8, stroke="#cbd5e1", opacity=.65}) {
+  const lines = [];
+  for (let i = 1; i < cols; i++) {
+    const xx = x + (w * i / cols);
+    lines.push(<line key={"v"+i} x1={xx} x2={xx} y1={y} y2={y+h} stroke={stroke} opacity={opacity} strokeWidth="0.8"/>);
+  }
+  for (let i = 1; i < rows; i++) {
+    const yy = y + (h * i / rows);
+    lines.push(<line key={"h"+i} x1={x} x2={x+w} y1={yy} y2={yy} stroke={stroke} opacity={opacity} strokeWidth="0.8"/>);
+  }
+  return <>{lines}</>;
+}
+
+function ArrowMarker() {
+  return (
+    <defs>
+      <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+      </marker>
+      <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#059669"/>
+      </marker>
+      <marker id="arrowSlate" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
+      </marker>
+      <marker id="arrowViolet" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#7c3aed"/>
+      </marker>
+    </defs>
+  )
+}
+
+function Pill({children, color="slate"}) {
+  const styles = {
+    blue:"bg-blue-50 text-blue-700 border-blue-200",
+    green:"bg-emerald-50 text-emerald-700 border-emerald-200",
+    orange:"bg-orange-50 text-orange-700 border-orange-200",
+    rose:"bg-rose-50 text-rose-700 border-rose-200",
+    purple:"bg-violet-50 text-violet-700 border-violet-200",
+    slate:"bg-slate-50 text-slate-600 border-slate-200",
+  };
+  return <span className={"inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-semibold tracking-tight "+styles[color]}>{children}</span>
+}
+
+function ProgressBar({value, color="bg-emerald-500"}) {
+  return (
+    <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+      <div className={"h-full rounded-full transition-all duration-300 "+color} style={{width:`${Math.max(0,Math.min(100,value))}%`}} />
+    </div>
+  )
+}
+
+function SecTitle({n, title, children, right}) {
+  return (
+    <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4 mb-5">
+      <div className="flex items-start gap-3">
+        <div className="num-badge">{n}</div>
+        <div>
+          <h2 className="text-xl sm:text-[1.4rem] font-black tracking-tight text-slate-900 leading-snug">{title}</h2>
+          {children ? <p className="text-sm text-slate-500 mt-1.5 leading-6 max-w-3xl">{children}</p> : null}
+        </div>
+      </div>
+      {right ? <div className="flex flex-wrap items-center gap-2">{right}</div> : null}
+    </div>
+  )
+}
+
+function KTimeline({tiles, kIndex, setKIndex}) {
+  return (
+    <div className="overflow-x-auto scrollbar-thin pb-1">
+      <div className="flex min-w-max gap-2">
+        {Array.from({length:tiles}).map((_,i)=>(
+          <button key={i} onClick={()=>setKIndex(i)}
+            className={`chip ${i===kIndex ? "chip-now" : i<kIndex ? "chip-done" : ""}`}>
+            k={i*8}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function PhaseBadge({phase, kk, sub}) {
+  const subName = ["32 lane 载入 reg_A（含广播）", "32 lane 载入 reg_B（含组播）", "32 × 64 FMA"][sub] || "";
+  const phases = [
+    {name:"协作加载", detail:"Global → Shared（与 thread tiling 完全相同）", color:"blue"},
+    {name:"同步屏障", detail:"__syncthreads()", color:"purple"},
+    {name:"warp 外积", detail:`kk = ${kk} · ${subName}`, color:"rose"},
+    {name:"推进 / 写回", detail:"进入下一 K tile", color:"orange"},
+  ];
+  const p = phases[phase];
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+      <Pill color={p.color}>{p.name}</Pill>
+      <span className="text-sm text-slate-600">{p.detail}</span>
+    </div>
+  )
+}
+
+// =================================================================
+// Section 1：数据流总览（与 thread tiling 相同，数字一致）
+// =================================================================
+function OverviewChain({phase, sub, kIndex, tiles, playing}) {
+  const load = phase === 0;
+  const lds  = phase === 2 && sub < 2;
+  const fma  = phase === 2 && sub === 2;
+  const adv  = phase === 3;
+  return (
+    <svg viewBox="0 0 980 372" className="w-full">
+      <ArrowMarker/>
+      <text x="20" y="26" fontSize="15" fontWeight="800" fill="#0f172a">数据流与 thread tiling 完全一致 —— 改变的只有「32 个 lane 怎么排」</text>
+      <text x="20" y="46" fontSize="12" fill="#64748b">当前 k = {kIndex*8}，共 {tiles} 个 K tile；本 warp 每 kk 发出 512 次读请求，硬件只付出 96 次访问</text>
+
+      <g>
+        <rect x="16" y="66" width="196" height="228" rx="16" fill="#eff6ff" stroke="#bfdbfe"/>
+        <text x="114" y="92" textAnchor="middle" fontSize="14" fontWeight="800" fill="#1e3a8a">Global Memory</text>
+        <rect x="36" y="106" width="64" height="160" rx="8" fill="#dbeafe" stroke="#60a5fa" opacity={load?1:.6} className={load&&playing?"pulse-soft":""}/>
+        <text x="68" y="192" textAnchor="middle" fontSize="11" fontWeight="700" fill="#1d4ed8">A</text>
+        <rect x="118" y="106" width="76" height="48" rx="8" fill="#d1fae5" stroke="#34d399" opacity={load?1:.6} className={load&&playing?"pulse-soft":""}/>
+        <text x="156" y="134" textAnchor="middle" fontSize="11" fontWeight="700" fill="#047857">B</text>
+        <text x="114" y="280" textAnchor="middle" fontSize="10.5" fill="#475569">每 K tile 每 block：8 KB</text>
+      </g>
+
+      <path d="M216 180 C240 180 252 180 276 180" fill="none" stroke="#2563eb" strokeWidth="3"
+            markerEnd="url(#arrowBlue)" className={load&&playing?"flow-line":""} opacity={load?1:.35}/>
+      <text x="246" y="166" textAnchor="middle" fontSize="10" fill="#1d4ed8">协作加载</text>
+
+      <g>
+        <rect x="280" y="66" width="200" height="228" rx="16" fill="#f0fdf4" stroke="#bbf7d0"/>
+        <text x="380" y="92" textAnchor="middle" fontSize="14" fontWeight="800" fill="#14532d">Shared Memory</text>
+        <rect x="300" y="102" width="70" height="118" rx="8" fill="#dbeafe" stroke="#3b82f6" opacity={load||lds||fma?1:.5}/>
+        <text x="335" y="158" textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#1d4ed8">smem_A</text>
+        <rect x="300" y="232" width="160" height="44" rx="8" fill="#d1fae5" stroke="#10b981" opacity={load||lds||fma?1:.5}/>
+        <text x="380" y="251" textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#047857">smem_B [8][128]</text>
+        <text x="380" y="266" textAnchor="middle" fontSize="9.5" fill="#475569">广播发生在这里 ↓</text>
+      </g>
+
+      <path d="M484 180 C508 180 520 180 544 180" fill="none" stroke="#7c3aed" strokeWidth="3"
+            markerEnd="url(#arrowViolet)" className={lds&&playing?"flow-line":""} opacity={lds?1:.35}/>
+      <text x="514" y="158" textAnchor="middle" fontSize="10" fill="#6d28d9">LDS 广播</text>
+      <text x="514" y="200" textAnchor="middle" fontSize="9" fill="#64748b">512 → 96 次</text>
+
+      <g>
+        <rect x="548" y="66" width="216" height="228" rx="16" fill="#fff1f2" stroke="#fecdd3"/>
+        <text x="656" y="92" textAnchor="middle" fontSize="14" fontWeight="800" fill="#881337">Registers（每 lane 私有）</text>
+        <rect x="568" y="104" width="34" height="112" rx="6" fill="#ffe4e6" stroke="#fb7185" opacity={lds?1:.55} className={lds&&playing?"pulse-soft":""}/>
+        <text x="585" y="164" textAnchor="middle" fontSize="9" fontWeight="700" fill="#be123c">reg_A</text>
+        <rect x="568" y="228" width="120" height="26" rx="6" fill="#d1fae5" stroke="#34d399" opacity={lds?1:.55} className={lds&&playing?"pulse-soft":""}/>
+        <text x="628" y="245" textAnchor="middle" fontSize="9" fontWeight="700" fill="#047857">reg_B[8]</text>
+        <rect x="622" y="104" width="120" height="112" rx="8" fill="#fff" stroke="#fb7185" opacity={fma?1:.6} className={fma&&playing?"compute-glow":""}/>
+        <MatrixGrid x={622} y={104} w={120} h={112} rows={8} cols={8} stroke="#fecdd3"/>
+        <text x="682" y="164" textAnchor="middle" fontSize="10" fontWeight="800" fill="#be123c">accum[8][8]</text>
+        <text x="656" y="280" textAnchor="middle" fontSize="10.5" fill="#9f1239">8 warp × 32 lane，各 80 寄存器</text>
+      </g>
+
+      <path d="M768 180 C792 180 804 180 826 180" fill="none" stroke="#ea580c" strokeWidth="3"
+            markerEnd="url(#arrowSlate)" className={adv&&playing?"flow-line":""} opacity={adv?1:.35}/>
+      <text x="797" y="158" textAnchor="middle" fontSize="10" fill="#9a3412">写回</text>
+
+      <g>
+        <rect x="830" y="66" width="134" height="228" rx="16" fill="#fff7ed" stroke="#fed7aa"/>
+        <text x="897" y="92" textAnchor="middle" fontSize="14" fontWeight="800" fill="#7c2d12">C tile</text>
+        <rect x="854" y="112" width="86" height="86" rx="10" fill="#ffedd5" stroke="#f97316" opacity={adv?1:.6}/>
+        <MatrixGrid x={854} y={112} w={86} h={86} rows={8} cols={8} stroke="#fdba74"/>
+        <text x="897" y="222" textAnchor="middle" fontSize="10.5" fill="#9a3412">128 × 128</text>
+        <text x="897" y="240" textAnchor="middle" fontSize="10" fill="#9a3412">8 warp tile 32×64</text>
+      </g>
+
+      <rect x="150" y="312" width="680" height="44" rx="14" fill="#ecfdf5" stroke="#a7f3d0"/>
+      <text x="490" y="339" textAnchor="middle" fontSize="12.5" fontWeight="700" fill="#065f46">
+        {load ? "① 协作加载（复用 matmul_reg.cuh 的 load_tile_A / load_tile_B）"
+            : phase===1 ? "② __syncthreads()"
+            : phase===2 ? (sub===0 ? `③a warp 内 32 个 lane 各装 reg_A[8]：同行 8 lane 地址相同 → 硬件广播`
+                        : sub===1 ? `③b 各装 reg_B[8]：同列 4 lane 地址相同 → 硬件组播`
+                        : `③c 32 个 lane 各做 64 次 FMA：共 2048 FMA / warp / kk`)
+            : "④ 推进到下一个 K tile"}
+      </text>
+    </svg>
+  );
+}
+
+// =================================================================
+// Section 2：线程层级 Block → warp → lane
+// =================================================================
+function HierarchyPanel({tid, setTid}) {
+  const d = decompose(tid);
+  // thread tiling 的映射（对照）
+  const ttRow0 = Math.floor(tid / 16) * 8;
+  const ttCol0 = (tid % 16) * 8;
+
+  const S = 3.5; // C tile 每 cell 像素
+  const cx = 24, cy = 48, cs = 448;
+
+  return (
+    <div className="grid xl:grid-cols-[minmax(420px,520px)_1fr] gap-5 items-start">
+      <div className="soft-card bg-white p-4 overflow-x-auto scrollbar-thin">
+        <svg viewBox="0 0 500 530" className="w-full min-w-[420px]">
+          <ArrowMarker/>
+          <text x={cx} y="30" fontSize="12.5" fontWeight="800" fill="#0f172a">Block 的 128×128 C tile · 8 个 warp tile（4×2）</text>
+
+          <rect x={cx} y={cy} width={cs} height={cs} rx="10" fill="#faf5ff" stroke="#ddd6fe"/>
+          {/* warp tiles */}
+          {Array.from({length:WARPS_M}).flatMap((_, wgr)=>
+            Array.from({length:WARPS_N}).map((__, wgc)=>{
+              const w = wgr*WARPS_N + wgc;
+              const sel = w === d.warp_id;
+              return (
+                <g key={"w"+w}>
+                  <rect x={cx+wgc*WARP_TILE_N*S} y={cy+wgr*WARP_TILE_M*S}
+                        width={WARP_TILE_N*S} height={WARP_TILE_M*S} rx="8"
+                        fill={sel?"#ede9fe":"#f5f3ff"} stroke={sel?"#7c3aed":"#c4b5fd"} strokeWidth={sel?2.4:1.2}/>
+                  <text x={cx+wgc*WARP_TILE_N*S+8} y={cy+wgr*WARP_TILE_M*S+18} fontSize="11" fontWeight="800"
+                        fill={sel?"#6d28d9":"#a78bfa"}>warp {w} · 32×64</text>
+                </g>
+              );
+            })
+          )}
+          {/* lane tiles in selected warp */}
+          {Array.from({length:WARP_M}).flatMap((_, lgr)=>
+            Array.from({length:WARP_N}).map((__, lgc)=>{
+              const lane = lgr*WARP_N + lgc;
+              const sel = lane === d.lane_id;
+              const wx = cx + d.warp_grid_col*WARP_TILE_N*S;
+              const wy = cy + d.warp_grid_row*WARP_TILE_M*S;
+              return (
+                <g key={"l"+lane}>
+                  <rect x={wx+lgc*TN*S} y={wy+lgr*TM*S} width={TN*S-2} height={TM*S-2} rx="4"
+                        fill={sel?"#fb7185":"#fff1f2"} stroke={sel?"#be123c":"#fecdd3"} strokeWidth={sel?1.8:1}/>
+                  {sel && <text x={wx+lgc*TN*S+(TN*S-2)/2} y={wy+lgr*TM*S+(TM*S)/2} textAnchor="middle" fontSize="9" fontWeight="800" fill="#fff">lane{lane}</text>}
+                </g>
+              );
+            })
+          )}
+          <text x={cx+cs/2} y={cy+cs+24} textAnchor="middle" fontSize="11" fill="#475569">N → 128 列（2 warp tile × 64）</text>
+          <text x={cx-12} y={cy+cs/2} textAnchor="middle" fontSize="11" fill="#475569" transform={`rotate(-90 ${cx-12} ${cy+cs/2})`}>M → 128 行（4 warp tile × 32）</text>
+          <text x={cx} y={cy+cs+48} fontSize="10.5" fill="#6d28d9" fontWeight="700">
+            选中：warp {d.warp_id}（grid 位置 {d.warp_grid_row},{d.warp_grid_col}）· lane {d.lane_id}（{d.lane_grid_row},{d.lane_grid_col}）
+          </text>
+        </svg>
+      </div>
+
+      <div className="space-y-4">
+        <div className="soft-card bg-white p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-extrabold text-slate-900">线程 ID 三级分解</div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-500">tid</span>
+              <input type="range" min="0" max="255" value={tid} onChange={e=>setTid(Number(e.target.value))} className="accent-violet-600 w-40"/>
+              <Pill color="purple">tid = {tid}</Pill>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-sm">
+            <div className="rounded-xl bg-slate-50 border px-3 py-2"><span className="text-xs text-slate-500">warp_id</span><div className="font-black mono">{d.warp_id}</div></div>
+            <div className="rounded-xl bg-slate-50 border px-3 py-2"><span className="text-xs text-slate-500">lane_id</span><div className="font-black mono">{d.lane_id}</div></div>
+            <div className="rounded-xl bg-slate-50 border px-3 py-2"><span className="text-xs text-slate-500">warp_grid (r,c)</span><div className="font-black mono">({d.warp_grid_row}, {d.warp_grid_col})</div></div>
+            <div className="rounded-xl bg-slate-50 border px-3 py-2"><span className="text-xs text-slate-500">lane_grid (r,c)</span><div className="font-black mono">({d.lane_grid_row}, {d.lane_grid_col})</div></div>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-2 mt-2 text-sm">
+            <div className="rounded-xl bg-violet-50 border border-violet-100 px-3 py-2 mono leading-6 text-violet-950">
+              tile_row0 = (warp_grid_row×{WARP_M} + lane_grid_row)×{TM} = <b>{d.tile_row0}</b><br/>
+              tile_col0 = (warp_grid_col×{WARP_N} + lane_grid_col)×{TN} = <b>{d.tile_col0}</b>
+            </div>
+            <div className="rounded-xl bg-slate-50 border px-3 py-2 text-xs leading-6 text-slate-600">
+              每步都用「×每组的数量 + 组内偏移」向上合并：<br/>
+              warp_id = tid &gt;&gt; 5，lane_id = tid &amp; 31
+            </div>
+          </div>
+        </div>
+
+        <div className="soft-card bg-white p-4">
+          <div className="font-extrabold text-slate-900">同一 tid，两种映射落点不同</div>
+          <div className="text-xs text-slate-500 mt-1">tid = {tid} 在 thread tiling 中落到 ({ttRow0}, {ttCol0})，在 warp tiling 中落到 ({d.tile_row0}, {d.tile_col0})</div>
+          <div className="grid grid-cols-2 gap-4 mt-3 max-w-md">
+            {[["thread tiling（线性摊平）", ttRow0, ttCol0, "border-amber-200 bg-amber-50 text-amber-900"],
+              ["warp tiling（4×8 分组）", d.tile_row0, d.tile_col0, "border-violet-200 bg-violet-50 text-violet-900"]].map(([label, r0, c0, cls])=>(
+              <div key={label}>
+                <div className={`text-[11px] font-bold mb-1.5 ${cls.split(" ")[2]}`}>{label}</div>
+                <svg viewBox="0 0 164 164" className="w-full">
+                  <rect x="2" y="2" width="160" height="160" rx="8" fill="#fff7ed" stroke="#fdba74"/>
+                  {Array.from({length:16}).map((_,i)=>(
+                    <g key={"m"+i}>
+                      <line x1={2+i*10} x2={2+i*10} y1="2" y2="162" stroke="#fed7aa" strokeWidth="0.6"/>
+                      <line x1="2" x2="162" y1={2+i*10} y2={2+i*10} stroke="#fed7aa" strokeWidth="0.6"/>
+                    </g>
+                  ))}
+                  <rect x={2+c0*10} y={2+r0*10} width="80" height="80" rx="3" fill="#7c3aed" opacity="0.8"/>
+                </svg>
+                <div className="mono text-[10px] text-slate-500 mt-1">tile ({r0}, {c0}) · 8×8</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-xs leading-6 text-emerald-950">
+          <b>为什么 warp 网格必须是 4×2：</b>
+          M 方向 4 warp × 4 lane-row × 8 行 = 128 ✓，N 方向 2 warp × 8 lane-col × 8 列 = 128 ✓，恰好铺满。
+          若用 8×1 的 warp 网格：M = 8×4×8 = 256（超出），N = 1×8×8 = 64（不足）—— 4×2 是唯一解（8×4 为其转置等价形式）。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 3：广播 —— warp 内的共享内存复用（核心）
+// =================================================================
+function BroadcastPanel({kk, sub, tid, playing}) {
+  const d = decompose(tid);
+  const warpTid0 = d.warp_id * 32;
+
+  // 4×8 lane 网格
+  const cell = 54, gap = 6, gx = 92, gy = 64;
+  // thread tiling 映射的 2×16 网格
+  const tW = 26, tGap = 4, tGx = 92, tGy = 400;
+
+  const totalReq = 32 * (TM + TN);          // 512
+  const uniqA = WARP_M * TM, uniqB = WARP_N * TN; // 32 / 64
+  const warpBytes = (uniqA + uniqB) * 4;    // 384
+  const warpAI = (32 * TM * TN * 2) / warpBytes; // 10.67
+  const ttUniq = 2*TM + 16*TN;              // 144
+  const ttBytes = ttUniq * 4;               // 576
+  const ttAI = (32 * TM * TN * 2) / ttBytes; // 7.11
+
+  return (
+    <div className="grid xl:grid-cols-[minmax(480px,1fr)_320px] gap-5 items-start">
+      <div className="soft-card bg-white p-4 overflow-x-auto scrollbar-thin">
+        <svg viewBox="0 0 620 500" className="w-full min-w-[520px]">
+          <text x="16" y="26" fontSize="13" fontWeight="800" fill="#0f172a">warp {d.warp_id} 的 32 个 lane（4×8）· tid {warpTid0}–{warpTid0+31}</text>
+          <text x="16" y="45" fontSize="11" fill="#64748b">
+            {sub===0 ? "当前：每条 reg_A[i] 指令中，同一行（同 lane_grid_row）的 8 个 lane 发出相同地址 → 广播 ×8"
+             : sub===1 ? "当前：每条 reg_B[j] 指令中，同一列（同 lane_grid_col）的 4 个 lane 发出相同地址 → 组播 ×4"
+             : "FMA 阶段：32 lane 并行做各自的外积，寄存器私有，无共享内存访问"}
+          </text>
+
+          {/* 列组播括号 */}
+          {Array.from({length:WARP_N}).map((__, c)=>(
+            <g key={"cb"+c} opacity={sub===1?1:.3}>
+              <path d={`M${gx+c*(cell+gap)+(cell/2)} ${gy-14} L${gx+c*(cell+gap)+(cell/2)} ${gy-6}`}
+                    stroke={COL_STROKE[c]} strokeWidth="2" fill="none"/>
+              {sub===1 && <text x={gx+c*(cell+gap)+(cell/2)} y={gy-18} textAnchor="middle" fontSize="9" fontWeight="800" fill={COL_STROKE[c]}>×4</text>}
+            </g>
+          ))}
+          {/* 行广播括号 */}
+          {Array.from({length:WARP_M}).map((__, r)=>(
+            <g key={"rb"+r} opacity={sub===0?1:.35}>
+              <path d={`M${gx-14} ${gy+r*(cell+gap)+(cell/2)} L${gx-6} ${gy+r*(cell+gap)+(cell/2)}`}
+                    stroke="#1d4ed8" strokeWidth="2"/>
+              {sub===0 && <text x={gx-18} y={gy+r*(cell+gap)+(cell/2)+3} textAnchor="end" fontSize="9" fontWeight="800" fill="#1d4ed8">×8</text>}
+            </g>
+          ))}
+
+          {Array.from({length:WARP_M}).flatMap((_, r)=>
+            Array.from({length:WARP_N}).map((__, c)=>{
+              const lane = r*WARP_N + c;
+              const sel = lane === d.lane_id;
+              return (
+                <g key={"lane"+lane}>
+                  <rect x={gx+c*(cell+gap)} y={gy+r*(cell+gap)} width={cell} height={cell} rx="9"
+                        fill={ROW_FILL[r]} stroke={COL_STROKE[c]} strokeWidth="2.6"
+                        opacity={sub===2?0.55:1}
+                        className={(sub===0&&playing)?"pulse-soft":(sub===1&&playing)?"pulse-soft":""}/>
+                  <text x={gx+c*(cell+gap)+cell/2} y={gy+r*(cell+gap)+cell/2-2} textAnchor="middle" fontSize="11" fontWeight="800" fill="#0f172a">l{lane}</text>
+                  <text x={gx+c*(cell+gap)+cell/2} y={gy+r*(cell+gap)+cell/2+14} textAnchor="middle" fontSize="7.5" fill="#475569">tid{warpTid0+lane}</text>
+                  {sel && <rect x={gx+c*(cell+gap)-2} y={gy+r*(cell+gap)-2} width={cell+4} height={cell+4} rx="10" fill="none" stroke="#0f172a" strokeWidth="2.4"/>}
+                </g>
+              );
+            })
+          )}
+          <text x={gx} y={gy+4*(cell+gap)+22} fontSize="10.5" fill="#1d4ed8" fontWeight="700">填充色 = reg_A 广播组（同 lane_grid_row，8 lane 共享）</text>
+          <text x={gx} y={gy+4*(cell+gap)+40} fontSize="10.5" fill="#6d28d9" fontWeight="700">描边色 = reg_B 组播组（同 lane_grid_col，4 lane 共享）</text>
+
+          {/* 对照：thread tiling 的 2×16 摊平 */}
+          <text x="16" y={tGy-14} fontSize="12.5" fontWeight="800" fill="#92400e">对照：thread tiling 的线性摊平把同一 warp 摊成 2×16</text>
+          {Array.from({length:2}).flatMap((_, r)=>
+            Array.from({length:16}).map((__, c)=>{
+              const lane = r*16 + c;
+              return (
+                <rect key={"tt"+lane} x={tGx+c*(tW+tGap)} y={tGy+r*(tW+tGap)} width={tW} height={tW} rx="6"
+                      fill={ROW_FILL2[r]} stroke={`hsl(${c*22},70%,45%)`} strokeWidth="2"
+                      opacity={sub===2?0.5:1}/>
+              );
+            })
+          )}
+          <text x={tGx} y={tGy+2*(tW+tGap)+16} fontSize="10" fill="#64748b">填充 = A 广播组（只有 2 组×16 lane）· 描边 = B 组播组（16 组×2 lane）</text>
+        </svg>
+      </div>
+
+      <div className="space-y-3">
+        <div className="soft-card bg-white p-4">
+          <div className="font-extrabold text-slate-900">warp tiling（4×8）· 每个 kk</div>
+          <div className="mt-3 space-y-2.5 text-sm">
+            <div className="flex justify-between"><span className="text-slate-500">lane 发出的读请求</span><span className="mono font-bold">512 次</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">smem_A 去重后</span><span className="mono font-bold text-blue-700">{uniqA} 地址（{WARP_M} 行组 × 8）</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">smem_B 去重后</span><span className="mono font-bold text-emerald-700">{uniqB} 地址（{WARP_N} 列组 × 8）</span></div>
+            <div className="h-px bg-slate-100"/>
+            <div className="flex justify-between"><span className="text-slate-500">实际共享内存访问</span><span className="mono font-black text-violet-700">{uniqA+uniqB} 次（↓{(totalReq/(uniqA+uniqB)).toFixed(1)}×）</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">访存字节</span><span className="mono font-bold">{warpBytes} B（原 2048 B）</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">warp 算术强度</span><span className="mono font-black text-rose-600">{warpAI.toFixed(2)} F/B</span></div>
+          </div>
+          <div className="mt-3"><ProgressBar value={(warpAI/10.67)*100} color="bg-emerald-500"/></div>
+        </div>
+
+        <div className="soft-card bg-white p-4">
+          <div className="font-extrabold text-slate-900">thread tiling（2×16）· 每个 kk</div>
+          <div className="mt-3 space-y-2.5 text-sm">
+            <div className="flex justify-between"><span className="text-slate-500">实际共享内存访问</span><span className="mono font-bold">{ttUniq} 次</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">访存字节</span><span className="mono font-bold">{ttBytes} B</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">warp 算术强度</span><span className="mono font-bold text-amber-600">{ttAI.toFixed(2)} F/B</span></div>
+          </div>
+          <div className="mt-3"><ProgressBar value={(ttAI/10.67)*100} color="bg-amber-400"/></div>
+          <div className="mt-3 text-xs leading-6 text-slate-600">
+            仅重排 lane（代码其余部分不变），smem 访存减少 <b>{(ttUniq/(uniqA+uniqB)).toFixed(2)}×</b>：
+            线性摊平的广播极不均衡（A 16-way、B 只有 2-way），4×8 把两边拉平为 8-way / 4-way，总去重 {ttUniq} → {uniqA+uniqB} 个地址。
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-violet-50 border border-violet-100 px-3 py-3 text-xs leading-6 text-violet-950">
+          <b>硬件语义：</b>同一条 LDS 指令内，若多个 lane 访问<b>同一地址</b> → 合并为一次 bank 访问（广播/组播，免费）；
+          <b>不同地址、不同 bank</b> → 并行；<b>同 bank 不同地址</b> → 冲突串行。
+          广播能生效的前提是同一组的 lane 在同一条指令里发请求 —— 外积循环 <span className="mono">for i: reg_A[i]=…</span> 天然满足。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 4：warp 形状探索器
+// =================================================================
+function ShapeExplorer() {
+  const shapes = [[1,32],[2,16],[4,8],[8,4],[16,2],[32,1]];
+  const [sel, setSel] = useState(2); // 默认 4×8
+  const [x, y] = shapes[sel];
+
+  const ratio = (sx, sy) => (32*TM*TN*2) / ((sx*TM + sy*TN) * 4);
+  const valid = (sx, sy) => (sx*TM) <= BM && BM % (sx*TM) === 0 && (sy*TN) <= BN && BN % (sy*TN) === 0;
+
+  const curRatio = ratio(x, y);
+  const curValid = valid(x, y);
+
+  const chartH = 190, baseY = 210, bw = 56;
+  const scale = 13; // px per F/B
+
+  return (
+    <div className="grid xl:grid-cols-[minmax(520px,1fr)_340px] gap-5 items-start">
+      <div className="soft-card bg-white p-4">
+        <div className="flex flex-wrap gap-2 mb-3">
+          {shapes.map(([sx,sy],i)=>(
+            <button key={i} onClick={()=>setSel(i)}
+              className={`btn ${sel===i?"btn-dark":"btn-ghost"} mono`}>{sx} × {sy}{!valid(sx,sy)?"（无效）":""}</button>
+          ))}
+        </div>
+        <div className="overflow-x-auto scrollbar-thin">
+          <svg viewBox="0 0 680 250" className="w-full min-w-[520px]">
+            <line x1="30" y1={baseY} x2="660" y2={baseY} stroke="#cbd5e1" strokeWidth="1.5"/>
+            {shapes.map(([sx,sy],i)=>{
+              const h = ratio(sx,sy)*scale;
+              const bx = 40 + i*106;
+              const v = valid(sx,sy);
+              const isSel = i===sel;
+              return (
+                <g key={i} onClick={()=>setSel(i)} className="cursor-pointer">
+                  <rect x={bx} y={baseY-h} width={bw} height={h} rx="8"
+                        fill={v ? (isSel?"#7c3aed":"#a78bfa") : "#e2e8f0"}
+                        opacity={v?(isSel?0.95:0.7):1}
+                        stroke={v?(isSel?"#5b21b6":"#8b5cf6"):"#cbd5e1"} strokeWidth={isSel?2.5:1}/>
+                  {!v && <text x={bx+bw/2} y={baseY-h/2} textAnchor="middle" fontSize="10" fontWeight="700" fill="#94a3b8">铺不满</text>}
+                  <text x={bx+bw/2} y={baseY-h-8} textAnchor="middle" fontSize="12" fontWeight="800"
+                        fill={v?"#5b21b6":"#94a3b8"}>{ratio(sx,sy).toFixed(2)}</text>
+                  <text x={bx+bw/2} y={baseY+18} textAnchor="middle" fontSize="11" fontWeight="700" fill="#334155">{sx}×{sy}</text>
+                  <text x={bx+bw/2} y={baseY+33} textAnchor="middle" fontSize="9" fill="#64748b">
+                    {v ? `warp 网格 ${BM/(sx*TM)}×${BN/(sy*TN)}` : "无效"}
+                  </text>
+                </g>
+              );
+            })}
+            <text x="30" y="18" fontSize="12" fontWeight="700" fill="#475569">warp 算术强度 = 16·TM / (x+y)（TM=TN=8 时 = 128/(x+y)）FLOPs/Byte</text>
+          </svg>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="soft-card bg-white p-4">
+          <div className="font-extrabold text-slate-900 mono">{x} × {y} <span className="font-sans text-slate-500 text-sm">（x·y = 32）</span></div>
+          <div className="mt-3 space-y-2 text-sm">
+            <div className="flex justify-between"><span className="text-slate-500">warp tile 尺寸</span><span className="mono font-bold">{x*TM} × {y*TN}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">能否铺满 128×128</span>
+              <span className={`font-bold ${curValid?"text-emerald-600":"text-rose-600"}`}>{curValid?"能":"不能"}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">A 去重（x 组 × 8）</span><span className="mono font-bold">{x*TM} float</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">B 去重（y 组 × 8）</span><span className="mono font-bold">{y*TN} float</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">访存字节 / kk</span><span className="mono font-bold">{(x*TM+y*TN)*4} B</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">算术强度</span><span className="mono font-black text-violet-700">{curRatio.toFixed(2)} F/B</span></div>
+          </div>
+          {!curValid && (
+            <div className="mt-3 rounded-xl bg-rose-50 border border-rose-200 px-3 py-2.5 text-xs leading-6 text-rose-900">
+              warp tile 的 {x*TM}×{y*TN} 无法整除 128×128 —— 需要同时满足 128 % (x·8) = 0 且 128 % (y·8) = 0，即 x, y ≤ 16。
+            </div>
+          )}
+          {(x===4&&y===8)||(x===8&&y===4) ? (
+            <div className="mt-3 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2.5 text-xs leading-6 text-emerald-900">
+              最优解：x + y = 12 最小（均值不等式 + x·y=32 约束下）。4×8 与 8×4 理论等价，
+              本 kernel 取 4×8 —— 两者实测差异来自 bank 冲突模式与写回访存形状。
+            </div>
+          ) : null}
+        </div>
+        <div className="rounded-xl bg-slate-50 border px-4 py-3 text-xs leading-6 text-slate-600 mono">
+          ratio = 32·TM·TN·2 / ((x·TM + y·TN)·4)<br/>
+          TM=TN → = 16·TM / (x+y) = 128 / (x+y)
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// App
+// =================================================================
+function App(){
+  const [playing,setPlaying]=useState(true);
+  const [speed,setSpeed]=useState(1);
+  const [demoK,setDemoK]=useState(64);
+  const tiles = demoK/8;
+  const [kIndex,setKIndex]=useState(0);
+  const [step,setStep]=useState(0);
+  const [tid,setTid]=useState(37);
+  const timer=useRef(null);
+
+  const inCompute = step>=2 && step<=25;
+  const kk = inCompute ? Math.floor((step-2)/3) : 0;
+  const sub = inCompute ? (step-2)%3 : 0;
+  const phase = step===0 ? 0 : step===1 ? 1 : inCompute ? 2 : 3;
+  const kkDone = step>=26 ? 8 : inCompute ? kk + (sub===2?1:0) : 0;
+  const accumulation = Math.min(100, ((kIndex + kkDone/8)/tiles)*100);
+
+  function nextStep(){
+    if(step<26){ setStep(step+1); return; }
+    setStep(0);
+    if(kIndex<tiles-1) setKIndex(kIndex+1);
+    else { setKIndex(0); setPlaying(false); }
+  }
+  function reset(){ setPlaying(false); setKIndex(0); setStep(0); }
+
+  useEffect(()=>{
+    if(!playing) return;
+    const ms = Math.max(140, 650/speed);
+    timer.current=setTimeout(nextStep, ms);
+    return ()=>clearTimeout(timer.current);
+  },[playing, speed, step, kIndex, tiles]);
+
+  return (
+    <main className="max-w-[1480px] mx-auto px-4 sm:px-6 py-7 sm:py-10">
+
+      <header className="mb-6">
+        <div className="card relative overflow-hidden p-6 sm:p-9">
+          <div className="pointer-events-none absolute -top-28 -right-24 w-80 h-80 rounded-full bg-gradient-to-br from-emerald-200/45 to-blue-200/40 blur-3xl"/>
+          <div className="pointer-events-none absolute -bottom-32 -left-20 w-72 h-72 rounded-full bg-gradient-to-tr from-violet-200/35 to-emerald-200/30 blur-3xl"/>
+          <div className="relative flex flex-col xl:flex-row xl:items-end xl:justify-between gap-6">
+            <div>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <Pill color="blue">BM = BN = 128</Pill>
+                <Pill color="green">BK = 8</Pill>
+                <Pill color="purple">lane 网格 4 × 8</Pill>
+                <Pill color="rose">warp tile 32 × 64 · warp 网格 4×2</Pill>
+                <Pill color="slate">THREADS = 256 = 8 warp</Pill>
+              </div>
+              <h1 className="text-3xl sm:text-[2.5rem] font-black tracking-tight text-slate-950 leading-tight">
+                CUDA GEMM：Warp 级 Tiling —— 广播复用动图解
+              </h1>
+              <p className="mt-3 text-slate-600 max-w-4xl leading-7">
+                对应 <span className="mono font-semibold">matmul_warp.cuh</span>。计算循环与 thread tiling 一字不差，
+                唯一的改动是 <span className="mono">tile_row0 / tile_col0</span> 的推导方式：
+                让 warp 内 32 个 lane 紧凑排成 4×8，使同一 M 位置的 8 个 lane 读到相同的
+                <span className="mono"> reg_A</span>（硬件广播）、同一 N 位置的 4 个 lane 读到相同的
+                <span className="mono"> reg_B</span>（硬件组播）—— 共享内存访问从 576 B 降到 384 B / warp·kk。
+              </p>
+            </div>
+            <div className="text-sm text-slate-500 xl:text-right shrink-0">
+              <div>单页交互演示 · React + Tailwind CSS + SVG</div>
+              <div className="mt-1">前置知识：<a className="text-blue-600 font-semibold hover:underline" href="./gemm_thread_tiling_interactive.html">Thread 级 Tiling</a></div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section className="glass-bar rounded-2xl p-4 sm:p-5 sticky top-3 z-20 mb-6">
+        <div className="flex flex-col xl:flex-row xl:items-center gap-4 xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={()=>setPlaying(!playing)} className={`btn ${playing?"btn-dark":"btn-blue"}`}>
+              {playing ? "暂停" : "播放"}
+            </button>
+            <button onClick={()=>{setPlaying(false);nextStep();}} className="btn btn-ghost">单步执行</button>
+            <button onClick={reset} className="btn btn-ghost">重置</button>
+            <div className="hidden sm:block w-px h-8 bg-slate-200 mx-1"/>
+            <PhaseBadge phase={phase} kk={kk} sub={sub}/>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <label className="flex items-center gap-2">
+              <span className="text-slate-500">演示 K</span>
+              <select value={demoK} onChange={e=>{setPlaying(false);setDemoK(Number(e.target.value));setKIndex(0);setStep(0);}}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 font-semibold">
+                <option value="32">32</option>
+                <option value="64">64</option>
+                <option value="128">128</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="text-slate-500">速度</span>
+              <input type="range" min=".5" max="3" step=".5" value={speed}
+                     onChange={e=>setSpeed(Number(e.target.value))} className="accent-emerald-600"/>
+              <span className="w-8 font-bold">{speed}×</span>
+            </label>
+            <div className="text-right">
+              <div className="text-xs text-slate-500">C tile 累计进度</div>
+              <div className="font-black text-emerald-700 leading-5">{Math.round(accumulation)}%</div>
+            </div>
+          </div>
+        </div>
+        <div className="hairline my-4"/>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-bold text-slate-400 shrink-0">K 时间轴</span>
+          <KTimeline tiles={tiles} kIndex={kIndex} setKIndex={(i)=>{setPlaying(false);setKIndex(i);setStep(0);}}/>
+        </div>
+      </section>
+
+      <section className="grid 2xl:grid-cols-2 gap-6">
+        <div className="card p-4 sm:p-5">
+          <SecTitle n="1" title="数据流总览：不变的部分" right={<Pill color="blue">k = {kIndex*8}</Pill>}>
+            加载、屏障、外积循环都与 thread tiling 相同（直接复用 <span className="mono">load_tile_A/B</span>）——
+            warp tiling 是一次纯「映射」层面的优化。
+          </SecTitle>
+          <OverviewChain phase={phase} sub={sub} kIndex={kIndex} tiles={tiles} playing={playing}/>
+        </div>
+
+        <div className="card p-4 sm:p-5">
+          <SecTitle n="2" title="线程层级：Block → warp → lane"
+            right={<div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+              <span className="text-sm text-slate-500">tid</span>
+              <input type="range" min="0" max="255" value={tid} onChange={e=>setTid(Number(e.target.value))} className="accent-violet-600 w-32"/>
+              <Pill color="purple">{tid}</Pill>
+            </div>}>
+            tid 先拆成 warp_id / lane_id，再各自分解到二维网格位置 —— 每一级都是「组号 × 组大小 + 组内编号」。
+          </SecTitle>
+          <HierarchyPanel tid={tid} setTid={setTid}/>
+        </div>
+      </section>
+
+      <section className="card p-4 sm:p-5 mt-6">
+        <SecTitle n="3" title="广播：让 warp 内的重复读取变成一次硬件访问">
+          播放/单步到 ①/② 阶段时观察括号标注：填充色的每一行共享相同的 reg_A 地址（×8 广播），描边色的每一列共享相同的 reg_B 地址（×4 组播）。
+          下方与 thread tiling 的 2×16 摊平对照。
+        </SecTitle>
+        <BroadcastPanel kk={kk} sub={sub} tid={tid} playing={playing}/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mt-6">
+        <SecTitle n="4" title="warp 形状探索器：x · y = 32，哪种排布最「方」？">
+          x 是 M 方向 lane 数、y 是 N 方向 lane 数。x·y 固定为 32，x+y 决定去重后的访存量 —— 均值不等式给出 (4,8) 与 (8,4)。
+        </SecTitle>
+        <ShapeExplorer/>
+      </section>
+
+      <section className="grid lg:grid-cols-3 gap-4 mt-6">
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="purple">①</Pill><h3 className="font-black tracking-tight">改的是映射，不是计算</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            对比 <span className="mono">matmul_reg.cuh</span>：外积三重循环完全一致，
+            只有 <span className="mono">tile_row0/tile_col0</span> 从 <span className="mono">(tid/16, tid%16)×8</span>
+            换成了 warp/lane 两级分解 —— 一行映射换来 33% 的 smem 带宽节省（576B → 384B / warp·kk）。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="green">②</Pill><h3 className="font-black tracking-tight">广播是免费的硬件能力</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            同一 warp 同一指令访问同一地址时，硬件合并为一次 bank 访问。
+            代价为零，但有两个前提：地址确实相同（lane 排布保证），且在同一条指令中发出（外积循环结构保证）。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="rose">③</Pill><h3 className="font-black tracking-tight">「越方越好」的直觉</h3></div>
+          <div className="mono text-xs sm:text-sm leading-7 mt-3 text-slate-700">
+            ratio = 16·TM / (x+y)<br/>
+            x·y = 32 → x+y ≥ 2√32 ≈ 11.3<br/>
+            整数解：(4,8)、(8,4) → 10.67
+          </div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            warp 越接近正方形，M/N 两个方向上的共享组越大、去重越彻底；1×32 这类极端排布几乎无广播收益。
+          </p>
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950 leading-6">
+        <b>准确性细节：</b>
+        ① 「512 → 96」统计的是每个 kk 内 warp 发出的 lane 读请求与实际发生的共享内存访问（广播/组播合并后）；
+        FMA 数不变（2048 / warp·kk）。② 4×8 与 8×4 的理论算术强度相同（10.67），区别只在 bank 冲突与写回模式等微观测层面。
+        ③ warp tiling 之后 smem 读取已到该映射的下界，再要降低指令数就需要 float4 ——
+        见 <a className="font-semibold underline" href="./gemm_vectorized_interactive.html">向量化优化</a>。
+      </section>
+
+      <footer className="py-10 text-center text-xs text-slate-400">
+        CUDA GEMM Warp Tiling · Interactive Teaching Diagram ·
+        代码 <span className="mono">matmul_warp.cuh</span> · 笔记 note.md §6 ·
+        系列：<a className="hover:underline" href="./gemm_block_tiling_interactive.html">Block Tiling</a> →
+        <a className="hover:underline" href="./gemm_thread_tiling_interactive.html"> Thread Tiling</a> →
+        <a className="hover:underline" href="./gemm_warp_tiling_interactive.html"> Warp Tiling</a> →
+        <a className="hover:underline" href="./gemm_vectorized_interactive.html"> float4</a>
+      </footer>
+    </main>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

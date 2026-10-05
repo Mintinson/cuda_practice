@@ -4,7 +4,8 @@
 
 - **算力** $\pi$  ：也称为计算平台的**性能上限**，指的是一个计算平台倾尽全力每秒钟所能完成的浮点运算数。单位是 `FLOPS` or `FLOP/s`。
 
-$$\pi : \text{Maximum FLOPs Per Second}$$ 
+$$
+\pi : \text{Maximum FLOPs Per Second}$$ 
 
 
 - **带宽** $\beta$  ：也即计算平台的**带宽上限**，指的是一个计算平台倾尽全力每秒所能完成的内存交换量。单位是 `Byte/s`。

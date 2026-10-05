@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CUDA GEMM Thread Block Tiling - Interactive</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(1100px 540px at 6% -8%, rgba(59,130,246,.11), transparent 62%),
+        radial-gradient(900px 480px at 98% 2%, rgba(16,185,129,.09), transparent 60%),
+        radial-gradient(900px 560px at 50% 108%, rgba(124,58,237,.08), transparent 62%),
+        #f7f9fc;
+      color: #0f172a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      background: rgba(255,255,255,.92);
+      border: 1px solid rgba(226,232,240,.95);
+      border-radius: 22px;
+      box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 16px 36px -16px rgba(15,23,42,.16);
+      backdrop-filter: blur(8px);
+      transition: box-shadow .25s ease, transform .25s ease;
+    }
+    .card:hover { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 22px 46px -18px rgba(15,23,42,.22); }
+    .soft-card {
+      border-radius: 18px;
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 1px 2px rgba(15,23,42,.04);
+      transition: box-shadow .2s ease, transform .2s ease;
+    }
+    .soft-card:hover { box-shadow: 0 8px 22px -12px rgba(15,23,42,.28); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .soft-grid {
+      background-image:
+        linear-gradient(to right, rgba(148,163,184,.12) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(148,163,184,.12) 1px, transparent 1px);
+      background-size: 18px 18px;
+    }
+    .flow-line { stroke-dasharray: 9 8; animation: dash 1.0s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -34; } }
+    .pulse-soft { animation: pulseSoft 1.1s ease-in-out infinite; }
+    @keyframes pulseSoft {
+      0%,100% { opacity: .45; filter: drop-shadow(0 0 0 rgba(59,130,246,0)); }
+      50% { opacity: 1; filter: drop-shadow(0 0 8px rgba(59,130,246,.35)); }
+    }
+    .particle { animation: moveParticle 1.2s ease-in-out infinite; }
+    @keyframes moveParticle {
+      0% { transform: translateX(0); opacity: 0; }
+      15% { opacity: 1; }
+      85% { opacity: 1; }
+      100% { transform: translateX(100px); opacity: 0; }
+    }
+    .compute-glow { animation: computeGlow .9s ease-in-out infinite; }
+    @keyframes computeGlow {
+      0%,100% { filter: drop-shadow(0 0 0 rgba(244,63,94,0)); }
+      50% { filter: drop-shadow(0 0 11px rgba(244,63,94,.55)); }
+    }
+    .num-badge {
+      width: 2.15rem; height: 2.15rem;
+      border-radius: .85rem;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-weight: 900; color: #fff; font-size: .95rem;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      box-shadow: 0 8px 16px -8px rgba(37,99,235,.9);
+      flex: none;
+    }
+    .glass-bar {
+      background: rgba(255,255,255,.82);
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 10px 30px -18px rgba(15,23,42,.35);
+      backdrop-filter: blur(14px);
+    }
+    .btn {
+      border-radius: 12px; font-weight: 700; font-size: .875rem;
+      padding: .5rem .95rem;
+      transition: all .18s ease;
+      box-shadow: 0 1px 2px rgba(15,23,42,.06);
+    }
+    .btn-ghost { background: #fff; border: 1px solid #e2e8f0; color: #334155; }
+    .btn-ghost:hover { background: #f8fafc; border-color: #cbd5e1; transform: translateY(-1px); }
+    .btn-dark { background: #0f172a; color: #fff; border: 1px solid #0f172a; }
+    .btn-dark:hover { transform: translateY(-1px); box-shadow: 0 8px 18px -10px rgba(15,23,42,.9); }
+    .btn-blue { background: linear-gradient(135deg,#2563eb,#3b82f6); color: #fff; border: 1px solid #2563eb; }
+    .btn-blue:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -10px rgba(37,99,235,.9); }
+    .chip {
+      border-radius: 12px; font-size: .72rem; font-weight: 800;
+      padding: .4rem .7rem; border: 1px solid #e2e8f0; background: #fff; color: #64748b;
+      transition: all .18s ease; white-space: nowrap;
+    }
+    .chip:hover { border-color: #93c5fd; color: #1d4ed8; }
+    .chip-done { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    .chip-now {
+      background: linear-gradient(135deg,#2563eb,#3b82f6);
+      border-color: #2563eb; color: #fff;
+      box-shadow: 0 8px 16px -8px rgba(37,99,235,.9);
+    }
+    input[type="range"] { height: 1.25rem; }
+    .scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 3px solid rgba(59,130,246,.25);
+      outline-offset: 2px;
+    }
+    .hairline { height: 1px; background: linear-gradient(to right, transparent, #e2e8f0 20%, #e2e8f0 80%, transparent); }
+    svg text { user-select: none; }
+  </style>
+</head>
+
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useEffect, useMemo, useRef, useState } = React;
+
+const COLORS = {
+  A: "#2563eb",
+  A2: "#93c5fd",
+  B: "#059669",
+  B2: "#6ee7b7",
+  C: "#ea580c",
+  C2: "#fdba74",
+  R: "#e11d48",
+  P: "#7c3aed",
+  G: "#475569",
+};
+
+function MatrixGrid({x, y, w, h, rows=8, cols=8, stroke="#cbd5e1", opacity=.65}) {
+  const lines = [];
+  for (let i = 1; i < cols; i++) {
+    const xx = x + (w * i / cols);
+    lines.push(<line key={"v"+i} x1={xx} x2={xx} y1={y} y2={y+h} stroke={stroke} opacity={opacity} strokeWidth="0.8"/>);
+  }
+  for (let i = 1; i < rows; i++) {
+    const yy = y + (h * i / rows);
+    lines.push(<line key={"h"+i} x1={x} x2={x+w} y1={yy} y2={yy} stroke={stroke} opacity={opacity} strokeWidth="0.8"/>);
+  }
+  return <>{lines}</>;
+}
+
+function ArrowMarker() {
+  return (
+    <defs>
+      <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill={COLORS.A}/>
+      </marker>
+      <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill={COLORS.B}/>
+      </marker>
+      <marker id="arrowRose" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill={COLORS.R}/>
+      </marker>
+      <marker id="arrowSlate" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill={COLORS.G}/>
+      </marker>
+    </defs>
+  )
+}
+
+function Pill({children, color="slate"}) {
+  const styles = {
+    blue:"bg-blue-50 text-blue-700 border-blue-200",
+    green:"bg-emerald-50 text-emerald-700 border-emerald-200",
+    orange:"bg-orange-50 text-orange-700 border-orange-200",
+    rose:"bg-rose-50 text-rose-700 border-rose-200",
+    purple:"bg-violet-50 text-violet-700 border-violet-200",
+    slate:"bg-slate-50 text-slate-600 border-slate-200",
+  };
+  return <span className={"inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-semibold tracking-tight "+styles[color]}>{children}</span>
+}
+
+function ProgressBar({value, color="bg-blue-500"}) {
+  return (
+    <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+      <div className={"h-full rounded-full transition-all duration-300 "+color} style={{width:`${Math.max(0,Math.min(100,value))}%`}} />
+    </div>
+  )
+}
+
+function SecTitle({n, title, children, right}) {
+  return (
+    <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4 mb-5">
+      <div className="flex items-start gap-3">
+        <div className="num-badge">{n}</div>
+        <div>
+          <h2 className="text-xl sm:text-[1.4rem] font-black tracking-tight text-slate-900 leading-snug">{title}</h2>
+          {children ? <p className="text-sm text-slate-500 mt-1.5 leading-6 max-w-3xl">{children}</p> : null}
+        </div>
+      </div>
+      {right ? <div className="flex flex-wrap items-center gap-2">{right}</div> : null}
+    </div>
+  )
+}
+
+function OverviewSVG({kIndex, tiles, phase, p, playing}) {
+  const aX=40, aY=78, aW=214, aH=200;
+  const bX=332, bY=78, bW=214, bH=200;
+  const cX=628, cY=78, cW=214, cH=200;
+  const stripW = aW / tiles;
+  const stripH = bH / tiles;
+  const active = (phase===0 || phase===1 || phase===2);
+  const compute = phase===2;
+  return (
+    <svg viewBox="0 0 900 400" className="w-full">
+      <ArrowMarker/>
+      <text x="20" y="26" fontSize="15" fontWeight="800" fill="#0f172a">一次 K-tile 迭代</text>
+      <text x="20" y="47" fontSize="12" fill="#64748b">当前 k = {kIndex*8}，BK = 8，p = {p}</text>
+
+      {/* A */}
+      <text x={aX} y={aY-14} fontSize="13" fontWeight="700" fill="#0f172a">A ∈ ℝ^(M×K)</text>
+      <rect x={aX} y={aY} width={aW} height={aH} rx="10" fill="#eff6ff" stroke="#93c5fd"/>
+      <MatrixGrid x={aX} y={aY} w={aW} h={aH} rows={10} cols={tiles} stroke="#bfdbfe"/>
+      <rect x={aX + kIndex*stripW} y={aY} width={stripW} height={aH}
+            fill={active ? "#3b82f6" : "#93c5fd"} opacity={active ? .78 : .45}
+            className={playing && phase===0 ? "pulse-soft":""}/>
+      <text x={aX+6} y={aY+aH+20} fontSize="11" fill="#475569">高亮：A[:, k:k+BK]</text>
+      <text x={aX-22} y={aY+aH/2} fontSize="11" fill="#475569" transform={`rotate(-90 ${aX-22} ${aY+aH/2})`}>M</text>
+      <text x={aX+aW/2} y={aY+aH+38} textAnchor="middle" fontSize="11" fill="#475569">K</text>
+
+      {/* B */}
+      <text x={bX} y={bY-14} fontSize="13" fontWeight="700" fill="#0f172a">B ∈ ℝ^(K×N)</text>
+      <rect x={bX} y={bY} width={bW} height={bH} rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+      <MatrixGrid x={bX} y={bY} w={bW} h={bH} rows={tiles} cols={10} stroke="#a7f3d0"/>
+      <rect x={bX} y={bY + kIndex*stripH} width={bW} height={stripH}
+            fill={active ? "#10b981" : "#6ee7b7"} opacity={active ? .78 : .45}
+            className={playing && phase===0 ? "pulse-soft":""}/>
+      <text x={bX+6} y={bY+bH+20} fontSize="11" fill="#475569">高亮：B[k:k+BK, :]</text>
+      <text x={bX-20} y={bY+bH/2} fontSize="11" fill="#475569" transform={`rotate(-90 ${bX-20} ${bY+bH/2})`}>K</text>
+      <text x={bX+bW/2} y={bY+bH+38} textAnchor="middle" fontSize="11" fill="#475569">N</text>
+
+      {/* C */}
+      <text x={cX} y={cY-14} fontSize="13" fontWeight="700" fill="#0f172a">C ∈ ℝ^(M×N)</text>
+      <rect x={cX} y={cY} width={cW} height={cH} rx="10" fill="#fff7ed" stroke="#fdba74"/>
+      <MatrixGrid x={cX} y={cY} w={cW} h={cH} rows={8} cols={8} stroke="#fed7aa"/>
+      <rect x={cX+22} y={cY+20} width={cW-44} height={cH-40} rx="8"
+            fill={compute ? "#fb923c" : "#fdba74"} opacity={compute ? .34 : .22}
+            stroke="#ea580c" strokeWidth="2.4" className={compute ? "compute-glow":""}/>
+      <text x={cX+cW/2} y={cY+88} textAnchor="middle" fontSize="14" fontWeight="800" fill="#9a3412">C tile</text>
+      <text x={cX+cW/2} y={cY+110} textAnchor="middle" fontSize="12" fill="#9a3412">128 × 128</text>
+      <text x={cX+cW/2} y={cY+132} textAnchor="middle" fontSize="11" fill="#9a3412">累加所有 K tile</text>
+
+      {/* operators */}
+      <text x="270" y="186" fontSize="30" fill="#334155">×</text>
+      <text x="582" y="186" fontSize="30" fill="#334155">→</text>
+
+      {/* Bottom current operation */}
+      <rect x="150" y="336" width="600" height="46" rx="14" fill="#fff1f2" stroke="#fecdd3"/>
+      <text x="450" y="355" textAnchor="middle" fontSize="12" fill="#9f1239" fontWeight="700">
+        C(tile) += A(tile: 128×8) × B(tile: 8×128)
+      </text>
+      <text x="450" y="373" textAnchor="middle" fontSize="11" fill="#be123c">
+        当前外积步：p = {p} / 7
+      </text>
+    </svg>
+  )
+}
+
+function MemoryFlowSVG({phase, playing, accumulation}) {
+  const load = phase===0;
+  const barrier = phase===1;
+  const compute = phase===2;
+  const write = phase===3;
+  return (
+    <svg viewBox="0 0 980 350" className="w-full">
+      <ArrowMarker/>
+      {/* columns */}
+      <g>
+        <rect x="20" y="44" width="210" height="252" rx="16" fill="#eff6ff" stroke="#bfdbfe"/>
+        <text x="125" y="72" textAnchor="middle" fontSize="14" fontWeight="800" fill="#1e3a8a">Global Memory</text>
+        <rect x="50" y="92" width="150" height="66" rx="10" fill="#dbeafe" stroke="#60a5fa"/>
+        <text x="125" y="118" textAnchor="middle" fontSize="12" fontWeight="700" fill="#1d4ed8">A tile = 128×8</text>
+        <text x="125" y="137" textAnchor="middle" fontSize="11" fill="#475569">4096 Bytes</text>
+        <rect x="50" y="182" width="150" height="66" rx="10" fill="#d1fae5" stroke="#34d399"/>
+        <text x="125" y="208" textAnchor="middle" fontSize="12" fontWeight="700" fill="#047857">B tile = 8×128</text>
+        <text x="125" y="227" textAnchor="middle" fontSize="11" fill="#475569">4096 Bytes</text>
+      </g>
+
+      <g>
+        <rect x="300" y="44" width="220" height="252" rx="16" fill="#f0fdf4" stroke="#bbf7d0"/>
+        <text x="410" y="72" textAnchor="middle" fontSize="14" fontWeight="800" fill="#14532d">Shared Memory</text>
+        <rect x="335" y="92" width="150" height="68" rx="10" fill="#dbeafe" stroke="#3b82f6"
+              opacity={load||barrier||compute?1:.45} className={load && playing?"pulse-soft":""}/>
+        <text x="410" y="118" textAnchor="middle" fontSize="12" fontWeight="800" fill="#1d4ed8">As[128][8]</text>
+        <text x="410" y="139" textAnchor="middle" fontSize="10.5" fill="#475569">block 内所有线程复用</text>
+        <rect x="335" y="184" width="150" height="68" rx="10" fill="#d1fae5" stroke="#10b981"
+              opacity={load||barrier||compute?1:.45} className={load && playing?"pulse-soft":""}/>
+        <text x="410" y="210" textAnchor="middle" fontSize="12" fontWeight="800" fill="#047857">Bs[8][128]</text>
+        <text x="410" y="231" textAnchor="middle" fontSize="10.5" fill="#475569">block 内所有线程复用</text>
+      </g>
+
+      <g>
+        <rect x="590" y="44" width="170" height="252" rx="16" fill="#fff1f2" stroke="#fecdd3"/>
+        <text x="675" y="72" textAnchor="middle" fontSize="14" fontWeight="800" fill="#881337">Registers</text>
+        <rect x="625" y="106" width="100" height="96" rx="12" fill="#ffe4e6" stroke="#fb7185"
+              opacity={compute?1:.65} className={compute && playing?"compute-glow":""}/>
+        <text x="675" y="140" textAnchor="middle" fontSize="12" fontWeight="800" fill="#be123c">Ct[8][8]</text>
+        <text x="675" y="160" textAnchor="middle" fontSize="10.5" fill="#9f1239">每线程私有</text>
+        <text x="675" y="182" textAnchor="middle" fontSize="10.5" fill="#9f1239">64 accumulators</text>
+        <text x="675" y="230" textAnchor="middle" fontSize="11" fontWeight="700" fill="#be123c">累计完成 {Math.round(accumulation)}%</text>
+        <foreignObject x="622" y="238" width="106" height="16">
+          <div xmlns="http://www.w3.org/1999/xhtml" className="w-full">
+            <ProgressBar value={accumulation} color="bg-rose-500"/>
+          </div>
+        </foreignObject>
+      </g>
+
+      <g>
+        <rect x="830" y="44" width="130" height="252" rx="16" fill="#fff7ed" stroke="#fed7aa"/>
+        <text x="895" y="72" textAnchor="middle" fontSize="14" fontWeight="800" fill="#7c2d12">C tile</text>
+        <rect x="852" y="106" width="86" height="86" rx="10" fill="#ffedd5" stroke="#f97316"
+              opacity={write?1:.65} className={write&&playing?"pulse-soft":""}/>
+        <MatrixGrid x={852} y={106} w={86} h={86} rows={8} cols={8} stroke="#fdba74"/>
+        <text x="895" y="216" textAnchor="middle" fontSize="11" fill="#9a3412">128 × 128</text>
+        <text x="895" y="235" textAnchor="middle" fontSize="10.5" fill="#9a3412">最终写回 Global</text>
+      </g>
+
+      {/* arrows */}
+      <path d="M230 125 C255 125,270 125,300 125" fill="none" stroke={COLORS.A} strokeWidth="3"
+            markerEnd="url(#arrowBlue)" className={load&&playing?"flow-line":""} opacity={load?1:.35}/>
+      <path d="M230 215 C255 215,270 215,300 215" fill="none" stroke={COLORS.B} strokeWidth="3"
+            markerEnd="url(#arrowGreen)" className={load&&playing?"flow-line":""} opacity={load?1:.35}/>
+      <text x="265" y="112" textAnchor="middle" fontSize="10" fill="#1d4ed8">协作加载</text>
+      <text x="265" y="202" textAnchor="middle" fontSize="10" fill="#047857">协作加载</text>
+
+      <path d="M520 170 C545 170,560 170,590 170" fill="none" stroke={COLORS.R} strokeWidth="3"
+            markerEnd="url(#arrowRose)" className={compute&&playing?"flow-line":""} opacity={compute?1:.35}/>
+      <text x="556" y="156" textAnchor="middle" fontSize="10" fill="#be123c">FMA</text>
+
+      <path d="M760 170 C790 170,805 170,830 170" fill="none" stroke={COLORS.C} strokeWidth="3"
+            markerEnd="url(#arrowSlate)" className={write&&playing?"flow-line":""} opacity={write?1:.35}/>
+      <text x="795" y="156" textAnchor="middle" fontSize="10" fill="#9a3412">写回</text>
+
+      {barrier && (
+        <g>
+          <line x1="536" y1="92" x2="536" y2="258" stroke="#7c3aed" strokeWidth="4" strokeDasharray="5 5"/>
+          <rect x="474" y="298" width="124" height="26" rx="13" fill="#ffffff" stroke="#ddd6fe"/>
+          <text x="536" y="316" textAnchor="middle" fontSize="11.5" fontWeight="800" fill="#6d28d9">__syncthreads()</text>
+        </g>
+      )}
+    </svg>
+  );
+}
+
+function ThreadLoadPanel({selectedWarp}) {
+  const asCells = [];
+  const bsCells = [];
+  for (let r=0; r<32; r++) {
+    for (let c=0; c<8; c++) {
+      const tid = r*8+c;
+      const warp = Math.floor(tid/32);
+      asCells.push(
+        <g key={"a"+tid}>
+          <rect x={c*18} y={r*7.5} width="17.2" height="6.7" rx="1.2"
+                fill={warp===selectedWarp ? "#60a5fa" : "#eff6ff"}
+                stroke={warp===selectedWarp ? "#2563eb" : "#bfdbfe"} strokeWidth=".6">
+            <title>{`tid=${tid} → a_thread_y=${r}, a_thread_x=${c}`}</title>
+          </rect>
+        </g>
+      );
+    }
+  }
+  for (let r=0; r<8; r++) {
+    for (let c=0; c<32; c++) {
+      const tid = r*32+c;
+      const warp = Math.floor(tid/32);
+      bsCells.push(
+        <g key={"b"+tid}>
+          <rect x={c*7.2} y={r*18} width="6.5" height="17.2" rx="1.2"
+                fill={warp===selectedWarp ? "#34d399" : "#ecfdf5"}
+                stroke={warp===selectedWarp ? "#059669" : "#a7f3d0"} strokeWidth=".55">
+            <title>{`tid=${tid} → b_thread_y=${r}, b_thread_x=${c}`}</title>
+          </rect>
+        </g>
+      );
+    }
+  }
+
+  const asRounds = [
+    {n:1, range:"行 0–31", expr:"i = a_thread_y", offset:0, color:"#93c5fd", label:"R1"},
+    {n:2, range:"行 32–63", expr:"i = a_thread_y + 32", offset:32, color:"#60a5fa", label:"R2"},
+    {n:3, range:"行 64–95", expr:"i = a_thread_y + 64", offset:64, color:"#3b82f6", label:"R3"},
+    {n:4, range:"行 96–127", expr:"i = a_thread_y + 96", offset:96, color:"#1d4ed8", label:"R4"},
+  ];
+  const bsRounds = [
+    {n:1, range:"列 0–31", expr:"j = b_thread_x", offset:0, color:"#a7f3d0", label:"R1"},
+    {n:2, range:"列 32–63", expr:"j = b_thread_x + 32", offset:32, color:"#6ee7b7", label:"R2"},
+    {n:3, range:"列 64–95", expr:"j = b_thread_x + 64", offset:64, color:"#34d399", label:"R3"},
+    {n:4, range:"列 96–127", expr:"j = b_thread_x + 96", offset:96, color:"#059669", label:"R4"},
+  ];
+
+  const asExampleTid = selectedWarp * 32;
+  const asY = Math.floor(asExampleTid / 8);
+  const asX = asExampleTid % 8;
+  const bsExampleTid = selectedWarp * 32;
+  const bsY = Math.floor(bsExampleTid / 32);
+  const bsX = bsExampleTid % 32;
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-5">
+      <div className="rounded-2xl border border-blue-100 bg-gradient-to-b from-blue-50/70 to-white p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-extrabold text-blue-900 leading-snug">加载 As：32 × 8 线程逻辑排布</div>
+            <div className="text-xs text-slate-600 mt-1.5 mono break-words">a_thread_y = tid / 8, a_thread_x = tid % 8</div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Pill color="blue">warp {selectedWarp}</Pill>
+            <Pill color="slate">4 轮 = 128 / 32</Pill>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-col sm:flex-row gap-4 sm:items-start">
+          <svg width="155" height="255" viewBox="0 0 145 248" className="shrink-0 mx-auto sm:mx-0 bg-white rounded-xl border border-slate-200">
+            <g transform="translate(0,4)">{asCells}</g>
+          </svg>
+          <div className="text-sm text-slate-700 leading-6">
+            <div className="font-semibold text-slate-900 mb-2">每一轮究竟加载哪里</div>
+            <p>256 个线程一次只覆盖 <b>32 行 × 8 列</b>。</p>
+            <p className="mt-2">代码是 <span className="mono">for (i = a_thread_y; i &lt; BM; i += 32)</span>，所以同一线程每轮都沿 <b>M 方向向下跳 32 行</b>。</p>
+            <p className="mt-2 text-xs text-slate-500">列坐标 <span className="mono">a_thread_x</span> 在四轮中不变，变化的是行坐标。</p>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-blue-100 bg-white p-3">
+          <div className="text-sm font-bold text-slate-900 mb-2">四轮覆盖 As[128][8] 的图示</div>
+          <div className="overflow-x-auto scrollbar-thin">
+            <svg width="100%" height="196" viewBox="0 0 380 196" className="min-w-[330px]">
+              <rect x="52" y="16" width="88" height="144" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+              {asRounds.map((r, idx) => (
+                <g key={r.n}>
+                  <rect x="52" y={16 + idx*36} width="88" height="36" fill={r.color} opacity="0.78" stroke="#ffffff" strokeWidth="1"/>
+                  <text x="4" y={38 + idx*36} fontSize="10.5" fontWeight="700" fill="#1d4ed8">第 {r.n} 轮</text>
+                  <text x="164" y={34 + idx*36} fontSize="11" fill="#334155">{r.range}</text>
+                  <text x="164" y={49 + idx*36} fontSize="10" fill="#64748b">{r.expr}</text>
+                  <circle cx={52 + (asX + 0.5) * 11} cy={16 + idx*36 + ((asY % 32)+0.5) * (36/32)} r="3.2" fill="#e11d48"/>
+                </g>
+              ))}
+              <text x="96" y="180" textAnchor="middle" fontSize="11" fill="#475569">As = 128 × 8</text>
+              <text x="148" y="88" textAnchor="middle" fontSize="11" fill="#475569" transform="rotate(-90 148 88)">128 行</text>
+              <text x="96" y="10" textAnchor="middle" fontSize="11" fill="#475569">8 列</text>
+            </svg>
+          </div>
+          <div className="text-xs text-slate-500 mt-2 leading-5">红点表示当前示例线程在四轮中的访问位置：<span className="mono break-all">({asY}+{`{0,32,64,96}`}, {asX})</span>。</div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {asRounds.map((r)=>(
+            <div key={r.n} className="soft-card bg-white p-3">
+              <div className="text-xs font-extrabold text-blue-700">第 {r.n} 轮</div>
+              <div className="text-sm font-black text-slate-900 mt-1">{r.range}</div>
+              <div className="mono text-[11px] text-slate-500 mt-2 break-words leading-5">{r.expr}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-3 rounded-xl border border-blue-100 bg-white px-3 py-3 text-xs leading-6">
+          <div className="font-bold text-blue-900">以 warp {selectedWarp} 的 tid={asExampleTid} 为例</div>
+          <div className="mono mt-1 text-slate-700">
+            a_thread_y={asY}, a_thread_x={asX}<br/>
+            第1轮：As[{asY}][{asX}]<br/>
+            第2轮：As[{asY+32}][{asX}]<br/>
+            第3轮：As[{asY+64}][{asX}]<br/>
+            第4轮：As[{asY+96}][{asX}]
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-xl bg-blue-50 border border-blue-100 px-3 py-2.5 text-xs text-blue-950 leading-6">
+          四轮整体覆盖：<b>[0:32), [32:64), [64:96), [96:128)</b> 四个行区间，最终填满 <b>128×8 As</b>。
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-emerald-100 bg-gradient-to-b from-emerald-50/70 to-white p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-extrabold text-emerald-900 leading-snug">加载 Bs：8 × 32 线程逻辑排布</div>
+            <div className="text-xs text-slate-600 mt-1.5 mono break-words">b_thread_y = tid / 32, b_thread_x = tid % 32</div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Pill color="green">warp {selectedWarp}</Pill>
+            <Pill color="slate">4 轮 = 128 / 32</Pill>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-col sm:flex-row gap-4 sm:items-start">
+          <svg width="250" height="168" viewBox="0 0 236 152" className="shrink-0 mx-auto sm:mx-0 bg-white rounded-xl border border-slate-200">
+            <g transform="translate(2,4)">{bsCells}</g>
+          </svg>
+          <div className="text-sm text-slate-700 leading-6">
+            <div className="font-semibold text-slate-900 mb-2">每一轮究竟加载哪里</div>
+            <p>256 个线程一次覆盖 <b>8 行 × 32 列</b>。</p>
+            <p className="mt-2">代码是 <span className="mono">for (j = b_thread_x; j &lt; BN; j += 32)</span>，所以同一线程每轮都沿 <b>N 方向向右跳 32 列</b>。</p>
+            <p className="mt-2 text-xs text-slate-500">行坐标 <span className="mono">b_thread_y</span> 在四轮中不变，变化的是列坐标。</p>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-emerald-100 bg-white p-3">
+          <div className="text-sm font-bold text-slate-900 mb-2">四轮覆盖 Bs[8][128] 的图示</div>
+          <div className="overflow-x-auto scrollbar-thin">
+            <svg width="100%" height="196" viewBox="0 0 360 196" className="min-w-[330px]">
+              <rect x="26" y="54" width="256" height="44" rx="8" fill="#ecfdf5" stroke="#6ee7b7"/>
+              {bsRounds.map((r, idx) => (
+                <g key={r.n}>
+                  <rect x={26 + idx*64} y="54" width="64" height="44" fill={r.color} opacity="0.82" stroke="#ffffff" strokeWidth="1"/>
+                  <text x={58 + idx*64} y="122" textAnchor="middle" fontSize="10" fontWeight="700" fill="#047857">第 {r.n} 轮</text>
+                  <text x={58 + idx*64} y="137" textAnchor="middle" fontSize="9.5" fill="#334155">{r.range}</text>
+                  <circle cx={26 + idx*64 + ((bsX % 32)+0.5) * 2} cy={54 + (bsY+0.5) * (44/8)} r="3.2" fill="#e11d48"/>
+                </g>
+              ))}
+              <text x="154" y="26" textAnchor="middle" fontSize="11" fill="#475569">Bs = 8 × 128</text>
+              <text x="11" y="76" textAnchor="middle" fontSize="11" fill="#475569" transform="rotate(-90 11 76)">8 行</text>
+              <text x="154" y="166" textAnchor="middle" fontSize="11" fill="#475569">128 列</text>
+            </svg>
+          </div>
+          <div className="text-xs text-slate-500 mt-2 leading-5">红点表示当前示例线程在四轮中的访问位置：<span className="mono break-all">({bsY}, {bsX}+{`{0,32,64,96}`})</span>。</div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {bsRounds.map((r)=>(
+            <div key={r.n} className="soft-card bg-white p-3">
+              <div className="text-xs font-extrabold text-emerald-700">第 {r.n} 轮</div>
+              <div className="text-sm font-black text-slate-900 mt-1">{r.range}</div>
+              <div className="mono text-[11px] text-slate-500 mt-2 break-words leading-5">{r.expr}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-3 rounded-xl border border-emerald-100 bg-white px-3 py-3 text-xs leading-6">
+          <div className="font-bold text-emerald-900">以 warp {selectedWarp} 的 tid={bsExampleTid} 为例</div>
+          <div className="mono mt-1 text-slate-700">
+            b_thread_y={bsY}, b_thread_x={bsX}<br/>
+            第1轮：Bs[{bsY}][{bsX}]<br/>
+            第2轮：Bs[{bsY}][{bsX+32}]<br/>
+            第3轮：Bs[{bsY}][{bsX+64}]<br/>
+            第4轮：Bs[{bsY}][{bsX+96}]
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2.5 text-xs text-emerald-950 leading-6">
+          四轮整体覆盖：<b>[0:32), [32:64), [64:96), [96:128)</b> 四个列区间，最终填满 <b>8×128 Bs</b>。
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+function OuterProductPanel({p, playing, phase, tid}) {
+  const active = phase === 2;
+  const tx = tid % 16;
+  const ty = Math.floor(tid / 16);
+  const rows = Array.from({length:8}, (_,i)=>ty + i*16);
+  const cols = Array.from({length:8}, (_,j)=>tx + j*16);
+  const sampleI = 2;
+  const sampleJ = 3;
+  const sampleRow = rows[sampleI];
+  const sampleCol = cols[sampleJ];
+  const aX = 22, aY = 44, aW = 84, aH = 170;
+  const bX = 142, bY = 262, bW = 176, bH = 54;
+
+  return (
+    <div className="mt-6 rounded-2xl border border-rose-100 bg-gradient-to-br from-white via-white to-rose-50/50 p-4 sm:p-5">
+      <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-3 mb-5">
+        <div>
+          <h3 className="text-lg font-black tracking-tight">4.1 当前线程如何通过外积累加自己的 8×8 输出</h3>
+          <p className="text-sm text-slate-500 mt-1.5 leading-7">
+            对当前线程而言，每次固定一个 <span className="mono">p</span>，会从 <b>As 的第 p 列</b>中取出 8 个值，
+            从 <b>Bs 的第 p 行</b>中取出 8 个值；这两个长度为 8 的向量做一次外积，
+            就会把当前线程私有的 <b>Ct[8][8]</b> 同时更新一遍。
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Pill color="purple">当前 p = {p}</Pill>
+          <Pill color="rose">第 {p+1} / 8 次 outer product</Pill>
+          <Pill color="slate">当前线程 tid = {tid}</Pill>
+        </div>
+      </div>
+
+      <div className="grid xl:grid-cols-2 gap-4 items-start">
+        <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4">
+          <div className="font-extrabold text-slate-900 leading-snug">① 当前线程会从 As / Bs 取哪些值</div>
+          <div className="text-xs text-slate-500 mt-1.5 leading-5">红点会随 tid 变化：它们对应当前线程负责的 8 个输出行与 8 个输出列。</div>
+
+          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+            <div className="overflow-x-auto scrollbar-thin">
+              <svg width="100%" height="344" viewBox="0 0 340 344" className="min-w-[300px]">
+                <text x="22" y="22" fontSize="12" fontWeight="700" fill="#1d4ed8">As[128][8]</text>
+                <rect x={aX} y={aY} width={aW} height={aH} rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+                <MatrixGrid x={aX} y={aY} w={aW} h={aH} rows={8} cols={8} stroke="#bfdbfe"/>
+                <rect x={aX + p*(aW/8)} y={aY} width={aW/8} height={aH} fill="#3b82f6" opacity="0.78" className={active&&playing?"pulse-soft":""}/>
+                {rows.map((r, i)=>(
+                  <circle key={i} cx={aX + (p+0.5)*(aW/8)} cy={aY + ((r+0.5)/128)*aH} r="3.2" fill="#e11d48"/>
+                ))}
+                <text x={aX+aW/2} y={aY-8} textAnchor="middle" fontSize="10" fill="#64748b">8 列</text>
+                <text x={aX-12} y={aY+aH/2} fontSize="10" fill="#64748b" transform={`rotate(-90 ${aX-12} ${aY+aH/2})`}>128 行</text>
+                <text x={aX+aW/2} y={aY+aH+18} textAnchor="middle" fontSize="11" fill="#475569">取第 p = {p} 列</text>
+
+                <text x="142" y="248" fontSize="12" fontWeight="700" fill="#047857">Bs[8][128]</text>
+                <rect x={bX} y={bY} width={bW} height={bH} rx="8" fill="#ecfdf5" stroke="#6ee7b7"/>
+                <MatrixGrid x={bX} y={bY} w={bW} h={bH} rows={8} cols={8} stroke="#a7f3d0"/>
+                <rect x={bX} y={bY + p*(bH/8)} width={bW} height={bH/8} fill="#10b981" opacity="0.78" className={active&&playing?"pulse-soft":""}/>
+                {cols.map((c, j)=>(
+                  <circle key={j} cx={bX + ((c+0.5)/128)*bW} cy={bY + (p+0.5)*(bH/8)} r="3.2" fill="#e11d48"/>
+                ))}
+                <text x={bX-12} y={bY+bH/2} fontSize="10" fill="#64748b" transform={`rotate(-90 ${bX-12} ${bY+bH/2})`}>8 行</text>
+                <text x={bX+bW/2} y={bY-8} textAnchor="middle" fontSize="10" fill="#64748b">128 列</text>
+                <text x={bX+bW/2} y={bY+bH+18} textAnchor="middle" fontSize="11" fill="#475569">取第 p = {p} 行</text>
+              </svg>
+            </div>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-3 mt-3">
+            <div className="soft-card bg-white p-3">
+              <div className="text-xs text-slate-500">由当前线程 tid 推导</div>
+              <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
+                <div className="rounded-lg bg-slate-50 border px-3 py-2"><span className="text-slate-500">c_thread_x</span><div className="font-extrabold mono">{tx}</div></div>
+                <div className="rounded-lg bg-slate-50 border px-3 py-2"><span className="text-slate-500">c_thread_y</span><div className="font-extrabold mono">{ty}</div></div>
+              </div>
+            </div>
+            <div className="soft-card bg-white p-3">
+              <div className="text-xs text-slate-500 mb-2">这一轮使用的 8 个行 / 列索引</div>
+              <div className="text-sm leading-6 text-slate-700">
+                <div><span className="font-semibold text-blue-700">rows</span> = <span className="mono break-all">[{rows.join(', ')}]</span></div>
+                <div className="mt-2"><span className="font-semibold text-emerald-700">cols</span> = <span className="mono break-all">[{cols.join(', ')}]</span></div>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3 text-xs text-blue-950 leading-6 mt-3">
+            红点之所以会跟随 <span className="mono">tid</span> 变化，是因为
+            <span className="mono"> row = c_thread_y + i×16</span>、
+            <span className="mono"> col = c_thread_x + j×16</span>。
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+          <div className="font-extrabold text-violet-900 leading-snug">② 固定 p 后，形成两个长度为 8 的向量</div>
+          <div className="text-xs text-slate-500 mt-1.5 leading-5">左边是 a[i]，右边是 b[j]；它们都由当前 tid 对应的 row / col 决定。</div>
+
+          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+            <div className="overflow-x-auto scrollbar-thin">
+              <svg width="100%" height="322" viewBox="0 0 400 322" className="min-w-[340px]">
+                <ArrowMarker/>
+                <text x="28" y="22" fontSize="12" fontWeight="700" fill="#334155">a[i] = As[rowᵢ][p]</text>
+                {rows.map((r, i)=>(
+                  <g key={i}>
+                    <rect x="24" y={36+i*25} width="94" height="20" rx="6" fill={i===sampleI?"#dbeafe":"#f8fafc"} stroke="#cbd5e1"/>
+                    <text x="71" y={50+i*25} textAnchor="middle" fontSize="10.5" fill="#0f172a">a{i}</text>
+                    <text x="126" y={50+i*25} fontSize="9.5" fill="#64748b">row={r}</text>
+                  </g>
+                ))}
+
+                <text x="214" y="22" fontSize="12" fontWeight="700" fill="#334155">b[j] = Bs[p][colⱼ]</text>
+                {cols.map((c, j)=>(
+                  <g key={j}>
+                    <rect x={214+j*19} y="36" width="17" height="80" rx="5" fill={j===sampleJ?"#d1fae5":"#f8fafc"} stroke="#cbd5e1"/>
+                    <text x={222.5+j*19} y="58" textAnchor="middle" fontSize="9.5" fill="#0f172a">b{j}</text>
+                    <text x={222.5+j*19} y="112" textAnchor="middle" fontSize="7.5" fill="#64748b" transform={`rotate(-90 ${222.5+j*19} 112)`}>col={c}</text>
+                  </g>
+                ))}
+
+                <path d="M152 133 C172 133 182 150 194 170" fill="none" stroke="#7c3aed" strokeWidth="2.6" markerEnd="url(#arrowSlate)"/>
+                <path d="M292 124 C292 142 278 152 264 170" fill="none" stroke="#7c3aed" strokeWidth="2.6" markerEnd="url(#arrowSlate)"/>
+
+                <rect x="196" y="172" width="110" height="46" rx="13" fill="#faf5ff" stroke="#c4b5fd"/>
+                <text x="251" y="192" textAnchor="middle" fontSize="11.5" fontWeight="700" fill="#6d28d9">outer product</text>
+                <text x="251" y="210" textAnchor="middle" fontSize="11" fill="#7c3aed">a ⊗ b</text>
+
+                <rect x="24" y="250" width="352" height="56" rx="14" fill="#faf5ff" stroke="#c4b5fd"/>
+                <text x="200" y="272" textAnchor="middle" fontSize="12" fontWeight="800" fill="#6d28d9">这一轮会生成一个 8×8 的 rank-1 更新</text>
+                <text x="200" y="292" textAnchor="middle" fontSize="10.5" fill="#475569">对所有 (i, j)：Ct[i][j] += a[i] × b[j]</text>
+              </svg>
+            </div>
+          </div>
+
+          <div className="soft-card bg-white p-3 mt-3">
+            <div className="text-xs text-slate-500">当前示例单元</div>
+            <div className="mono text-sm leading-7 mt-2 text-slate-800">
+              i = {sampleI}, j = {sampleJ}<br/>
+              row = {sampleRow}<br/>
+              col = {sampleCol}<br/>
+              a[{sampleI}] = As[{sampleRow}][{p}]<br/>
+              b[{sampleJ}] = Bs[{p}][{sampleCol}]
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-rose-100 bg-rose-50/60 p-4 mt-4">
+        <div className="font-extrabold text-rose-900 leading-snug">③ 这一次 outer product 如何更新当前线程的 Ct[8][8]</div>
+        <div className="text-xs text-slate-500 mt-1.5 leading-5">下图只画单个线程的寄存器块；完成 p=0..7 共 8 轮后，这 64 个位置都累积好了对应的小块部分和。</div>
+        <div className="grid lg:grid-cols-[minmax(300px,360px)_1fr] xl:grid-cols-[360px_1fr_240px] gap-4 mt-4 items-start">
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <div className="overflow-x-auto scrollbar-thin">
+              <svg width="100%" height="300" viewBox="0 0 340 300" className="min-w-[300px]">
+                <text x="170" y="24" textAnchor="middle" fontSize="12" fontWeight="700" fill="#be123c">Ct[8][8]（当前线程的寄存器块）</text>
+                {Array.from({length:8}).map((_, j)=>(
+                  <text key={"c"+j} x={55+j*31} y="44" textAnchor="middle" fontSize="9.5" fill="#64748b">j={j}</text>
+                ))}
+                {Array.from({length:8}).map((_, i)=>(
+                  <text key={"r"+i} x="14" y={64+i*26} fontSize="9.5" fill="#64748b">i={i}</text>
+                ))}
+                {Array.from({length:8}).flatMap((_, i)=>
+                  Array.from({length:8}).map((__, j)=>(
+                    <g key={`${i}-${j}`}>
+                      <rect x={37+j*31} y={50+i*26} width="24" height="20" rx="4"
+                            fill={(i===sampleI || j===sampleJ) ? '#ffe4e6' : '#fff1f2'}
+                            stroke={(i===sampleI || j===sampleJ) ? '#fb7185' : '#fecdd3'}
+                            opacity={active ? (0.58 + (((i+j+p)%3)*0.12)) : 0.92}
+                            className={active&&playing?"pulse-soft":""}/>
+                    </g>
+                  ))
+                )}
+                <rect x={37+sampleJ*31} y={50+sampleI*26} width="24" height="20" rx="4" fill="none" stroke="#be123c" strokeWidth="2.2"/>
+                <text x="170" y="280" textAnchor="middle" fontSize="11" fill="#475569">一次 p 会对当前线程执行 8×8 = 64 次 FMA</text>
+              </svg>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="soft-card border-rose-100 bg-white p-3">
+              <div className="text-xs text-slate-500">单个元素的更新公式</div>
+              <div className="mono text-sm leading-7 mt-2 text-slate-800">
+                Ct[{sampleI}][{sampleJ}] +=<br/>
+                As[{sampleRow}][{p}] × Bs[{p}][{sampleCol}]
+              </div>
+            </div>
+            <div className="soft-card border-rose-100 bg-white p-3">
+              <div className="text-xs text-slate-500">这一阶段的直觉</div>
+              <ul className="mt-2 text-sm text-slate-700 leading-6 list-disc pl-4">
+                <li>固定一个 p，相当于固定 K 方向上的一个切片。</li>
+                <li>As 提供 8 个纵向系数，Bs 提供 8 个横向系数。</li>
+                <li>两者做外积后，会把 Ct 的 64 个位置同时更新一次。</li>
+                <li>当 p 从 0 到 7 跑完，BK=8 这轮的小块部分和就完成了。</li>
+              </ul>
+            </div>
+          </div>
+
+          <div className="soft-card border-rose-100 bg-white p-3 lg:col-span-2 xl:col-span-1">
+            <div className="text-xs text-slate-500">当前 BK 内进度</div>
+            <div className="mt-2 flex items-end justify-between">
+              <div className="text-3xl font-black text-rose-600">{p+1}/8</div>
+              <div className="text-xs text-slate-500">outer product</div>
+            </div>
+            <div className="mt-3">
+              <ProgressBar value={((p+1)/8)*100} color="bg-rose-500"/>
+            </div>
+            <div className="mt-3 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-xs text-rose-950 leading-6">
+              当你拖动上面的 <span className="mono">tid</span> 滑块时，这里的
+              <span className="mono"> row / col / As / Bs / Ct 示例公式</span>都会同步变化。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CThreadDistribution({tid, setTid, p, playing, phase}) {
+  const tx = tid % 16;
+  const ty = Math.floor(tid / 16);
+  const active = phase === 2;
+  const rows = Array.from({length:8}, (_,i)=>ty + i*16);
+  const cols = Array.from({length:8}, (_,j)=>tx + j*16);
+  const sampleI = 2;
+  const sampleJ = 3;
+  const sampleRow = rows[sampleI];
+  const sampleCol = cols[sampleJ];
+
+  const cSize = 256;
+  const points = [];
+  for(let i=0;i<8;i++){
+    for(let j=0;j<8;j++){
+      points.push({
+        i,j,
+        row: rows[i],
+        col: cols[j],
+        x: (cols[j] + 0.5) / 128 * cSize,
+        y: (rows[i] + 0.5) / 128 * cSize,
+      });
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50/60 to-white p-4 sm:p-5">
+        <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4 mb-5">
+          <div className="flex items-start gap-3">
+            <div className="num-badge">4</div>
+            <div>
+              <h3 className="text-lg font-black tracking-tight leading-snug">当前线程负责的 8×8 输出，以及它如何由外积逐步累加</h3>
+              <p className="text-sm text-slate-500 mt-1.5 leading-6">
+                先通过 <span className="mono">tid</span> 确定当前线程在 <span className="mono">128×128</span> C tile 中负责的 64 个输出位置；
+                再观察它如何从 <span className="mono">As</span> 和 <span className="mono">Bs</span> 中取值，形成两个长度为 8 的向量，并通过外积逐步累加自己的 <span className="mono">Ct[8][8]</span>。
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Pill color="purple">当前 p = {p}</Pill>
+            <Pill color="rose">第 {p+1} / 8 次 outer product</Pill>
+            <Pill color="slate">当前线程 tid = {tid}</Pill>
+          </div>
+        </div>
+
+        <div className="grid lg:grid-cols-[1.15fr_.85fr] gap-4 mb-4 items-start">
+          <div className="soft-card border-blue-100 bg-blue-50/40 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-bold text-slate-900">选择线程</div>
+                <div className="text-xs text-slate-500 mt-1">拖动后，红点位置、row/col 与公式会同步变化</div>
+              </div>
+              <Pill color="purple">tid = {tid}</Pill>
+            </div>
+            <input className="w-full mt-4 accent-violet-600" type="range" min="0" max="255" value={tid}
+                   onChange={e=>setTid(Number(e.target.value))}/>
+            <div className="grid grid-cols-3 gap-2 mt-3 text-sm">
+              <div className="rounded-xl bg-white border px-3 py-2"><span className="text-slate-500 text-xs">c_thread_x</span><div className="font-extrabold mono">{tx}</div></div>
+              <div className="rounded-xl bg-white border px-3 py-2"><span className="text-slate-500 text-xs">c_thread_y</span><div className="font-extrabold mono">{ty}</div></div>
+              <div className="rounded-xl bg-white border px-3 py-2"><span className="text-slate-500 text-xs">BK 进度</span><div className="font-extrabold mono">{p+1} / 8</div></div>
+            </div>
+          </div>
+
+          <div className="soft-card border-rose-100 bg-rose-50/40 p-4">
+            <div className="font-bold text-rose-900">关键公式</div>
+            <div className="grid sm:grid-cols-3 gap-2 mt-3 text-sm text-slate-700">
+              <div className="rounded-xl bg-white border px-3 py-3 mono leading-7 break-words">
+                c_thread_x = tid % 16<br/>
+                c_thread_y = tid / 16
+              </div>
+              <div className="rounded-xl bg-white border px-3 py-3 mono leading-7 break-words">
+                row = c_thread_y + i × 16<br/>
+                col = c_thread_x + j × 16
+              </div>
+              <div className="rounded-xl bg-rose-50 border border-rose-100 px-3 py-3 mono text-rose-950 leading-7 break-words">
+                Ct[i][j] += As[row][p] × Bs[p][col]
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-3 sm:p-4 overflow-x-auto scrollbar-thin">
+          <svg viewBox="0 0 940 440" className="w-full min-w-[820px]">
+            <ArrowMarker/>
+
+            <text x="30" y="24" fontSize="13" fontWeight="800" fill="#0f172a">左：当前线程的局部计算路径</text>
+            <text x="600" y="24" fontSize="13" fontWeight="800" fill="#0f172a">右：映射到 128×128 的 C tile</text>
+
+            {/* As */}
+            <text x="30" y="44" fontSize="12" fontWeight="700" fill="#1d4ed8">As[128][8]</text>
+            <rect x="34" y="66" width="88" height="180" rx="10" fill="#eff6ff" stroke="#93c5fd"/>
+            <MatrixGrid x="34" y="66" w="88" h="180" rows={8} cols={8} stroke="#bfdbfe"/>
+            <rect x={34 + p*11} y="66" width="11" height="180" fill="#3b82f6" opacity="0.8" className={active&&playing?"pulse-soft":''}/>
+            {rows.map((r, i)=>(
+              <circle key={'ap'+i} cx={34 + p*11 + 5.5} cy={66 + ((r+0.5)/128)*180} r="3.2" fill="#e11d48"/>
+            ))}
+            <text x="78" y="58" textAnchor="middle" fontSize="10" fill="#64748b">8 列</text>
+            <text x="18" y="156" fontSize="10" fill="#64748b" transform="rotate(-90 18 156)">128 行</text>
+            <text x="78" y="264" textAnchor="middle" fontSize="11" fill="#475569">取第 p={p} 列</text>
+
+            {/* a vector */}
+            <text x="160" y="44" fontSize="12" fontWeight="700" fill="#334155">a[i] = As[rowᵢ][p]</text>
+            {rows.map((r,i)=>(
+              <g key={'avec'+i}>
+                <rect x="160" y={66+i*23} width="80" height="18" rx="5" fill={i===sampleI?"#dbeafe":"#f8fafc"} stroke="#cbd5e1"/>
+                <text x="200" y={79+i*23} textAnchor="middle" fontSize="10" fill="#0f172a">a{i}</text>
+                <text x="248" y={79+i*23} fontSize="9" fill="#64748b">row={r}</text>
+              </g>
+            ))}
+            <path d="M126 156 C140 156 148 156 156 156" fill="none" stroke="#2563eb" strokeWidth="2.5" markerEnd="url(#arrowBlue)"/>
+
+            {/* Ct */}
+            <text x="330" y="44" fontSize="12" fontWeight="700" fill="#be123c">Ct[8][8]（当前线程寄存器块）</text>
+            {Array.from({length:8}).map((_, j)=>(
+              <text key={'cttop'+j} x={344+j*20} y="66" textAnchor="middle" fontSize="9" fill="#64748b">j={j}</text>
+            ))}
+            {Array.from({length:8}).map((_, i)=>(
+              <text key={'ctleft'+i} x="322" y={88+i*18} fontSize="9" fill="#64748b">i={i}</text>
+            ))}
+            {Array.from({length:8}).flatMap((_, i)=>
+              Array.from({length:8}).map((__, j)=>(
+                <rect key={`ct-${i}-${j}`} x={340+j*20} y={78+i*18} width="16" height="14" rx="3"
+                  fill={(i===sampleI || j===sampleJ) ? '#ffe4e6' : '#fff1f2'}
+                  stroke={(i===sampleI || j===sampleJ) ? '#fb7185' : '#fecdd3'}
+                  opacity={active ? (0.62 + (((i+j+p)%3)*0.1)) : 0.95}
+                  className={active&&playing?"pulse-soft":''} />
+              ))
+            )}
+            <rect x={340+sampleJ*20} y={78+sampleI*18} width="16" height="14" rx="3" fill="none" stroke="#be123c" strokeWidth="2"/>
+            <rect x="330" y="72" width="176" height="156" rx="12" fill="none" stroke="#fecdd3"/>
+            <path d="M244 156 C272 156 296 156 326 156" fill="none" stroke="#7c3aed" strokeWidth="2.5" markerEnd="url(#arrowSlate)"/>
+            <text x="330" y="248" fontSize="10.5" fill="#6d28d9">outer product</text>
+
+            {/* Bs */}
+            <text x="32" y="300" fontSize="12" fontWeight="700" fill="#047857">Bs[8][128]</text>
+            <rect x="36" y="314" width="220" height="52" rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+            <MatrixGrid x="36" y="314" w="220" h="52" rows={8} cols={8} stroke="#a7f3d0"/>
+            <rect x="36" y={314 + p*6.5} width="220" height="6.5" fill="#10b981" opacity="0.8" className={active&&playing?"pulse-soft":''}/>
+            {cols.map((c, j)=>(
+              <circle key={'bp'+j} cx={36 + ((c+0.5)/128)*220} cy={314 + p*6.5 + 3.25} r="3.2" fill="#e11d48"/>
+            ))}
+            <text x="146" y="308" textAnchor="middle" fontSize="10" fill="#64748b">128 列</text>
+            <text x="20" y="340" fontSize="10" fill="#64748b" transform="rotate(-90 20 340)">8 行</text>
+            <text x="146" y="384" textAnchor="middle" fontSize="11" fill="#475569">取第 p={p} 行</text>
+
+            {/* b vector */}
+            <text x="292" y="300" fontSize="12" fontWeight="700" fill="#334155">b[j] = Bs[p][colⱼ]</text>
+            {cols.map((c,j)=>(
+              <g key={'bvec'+j}>
+                <rect x={292 + j*22} y="314" width="18" height="64" rx="5" fill={j===sampleJ?"#d1fae5":"#f8fafc"} stroke="#cbd5e1"/>
+                <text x={301+j*22} y="330" textAnchor="middle" fontSize="9" fill="#0f172a">b{j}</text>
+                <text x={301+j*22} y="372" textAnchor="middle" fontSize="7.8" fill="#64748b" transform={`rotate(-90 ${301+j*22} 372)`}>col={c}</text>
+              </g>
+            ))}
+            <path d="M418 306 C418 290 418 262 418 240" fill="none" stroke="#7c3aed" strokeWidth="2.5" markerEnd="url(#arrowSlate)"/>
+
+            {/* connector to C tile */}
+            <path d="M512 156 C535 156 555 156 578 156" fill="none" stroke="#ea580c" strokeWidth="2.5" strokeDasharray="6 6" markerEnd="url(#arrowSlate)"/>
+            <text x="545" y="146" textAnchor="middle" fontSize="10" fill="#9a3412">映射到 C tile</text>
+
+            {/* Right: C tile */}
+            <rect x="600" y="64" width="256" height="256" rx="12" fill="#fff7ed" stroke="#fdba74"/>
+            {Array.from({length:9}).map((_,i)=>(
+              <g key={'cgrid'+i}>
+                <line x1={600+i*32} x2={600+i*32} y1="64" y2="320" stroke="#c4b5fd" strokeWidth={i===0||i===8?1.6:1}/>
+                <line x1="600" x2="856" y1={64+i*32} y2={64+i*32} stroke="#c4b5fd" strokeWidth={i===0||i===8?1.6:1}/>
+              </g>
+            ))}
+            {points.map((pt, idx)=>(
+              <circle key={'ctp'+idx} cx={600+pt.x} cy={64+pt.y} r={idx===sampleI*8+sampleJ?4.4:3.1} fill="#e11d48" opacity={idx===sampleI*8+sampleJ?1:0.9}/>
+            ))}
+            <text x="728" y="52" textAnchor="middle" fontSize="12" fontWeight="700" fill="#9a3412">128 × 128 C tile</text>
+            <text x="728" y="342" textAnchor="middle" fontSize="11" fill="#475569">红点 = 当前线程负责的 8 × 8 个输出位置</text>
+            <text x="586" y="192" fontSize="10" fill="#64748b" transform="rotate(-90 586 192)">128 行</text>
+            <text x="728" y="362" textAnchor="middle" fontSize="10" fill="#64748b">128 列</text>
+
+            {/* bottom small annotation */}
+            <text x="600" y="400" fontSize="10.5" fill="#475569">高亮单元：(i, j) = ({sampleI}, {sampleJ}) → (row, col) = ({sampleRow}, {sampleCol})</text>
+            <text x="600" y="418" fontSize="10.5" fill="#475569">当前线程：tid = {tid}, c_thread_x = {tx}, c_thread_y = {ty}</text>
+          </svg>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function KTimeline({tiles, kIndex, setKIndex}) {
+  return (
+    <div className="overflow-x-auto scrollbar-thin pb-1">
+      <div className="flex min-w-max gap-2">
+        {Array.from({length:tiles}).map((_,i)=>(
+          <button key={i} onClick={()=>setKIndex(i)}
+            className={`chip ${i===kIndex ? "chip-now" : i<kIndex ? "chip-done" : ""}`}>
+            k={i*8}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function PhaseBadge({phase}) {
+  const phases = [
+    {name:"协作加载", detail:"Global → Shared", color:"blue"},
+    {name:"同步屏障", detail:"__syncthreads()", color:"purple"},
+    {name:"局部计算", detail:"BK 次外积/FMA", color:"rose"},
+    {name:"写回/推进", detail:"进入下一 K tile", color:"orange"},
+  ];
+  const p=phases[phase];
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+      <Pill color={p.color}>{p.name}</Pill>
+      <span className="text-sm text-slate-600">{p.detail}</span>
+    </div>
+  )
+}
+
+function App(){
+  const [playing,setPlaying]=useState(true);
+  const [speed,setSpeed]=useState(1);
+  const [demoK,setDemoK]=useState(64);
+  const tiles = demoK/8;
+  const [kIndex,setKIndex]=useState(0);
+  const [phase,setPhase]=useState(0);
+  const [p,setP]=useState(0);
+  const [warp,setWarp]=useState(0);
+  const [tid,setTid]=useState(37);
+  const timer=useRef(null);
+
+  const accumulation = useMemo(() => {
+    const base=(kIndex/tiles)*100;
+    const local = phase===2 ? ((p+1)/8)*(100/tiles) : phase===3 ? (100/tiles) : 0;
+    return Math.min(100, base+local);
+  },[kIndex, tiles, phase, p]);
+
+  function reset(){
+    setPlaying(false);
+    setKIndex(0); setPhase(0); setP(0); setWarp(0);
+  }
+
+  function nextStep(){
+    if(phase===0){ setPhase(1); return; }
+    if(phase===1){ setPhase(2); setP(0); return; }
+    if(phase===2){
+      if(p<7){ setP(p+1); return; }
+      setPhase(3); return;
+    }
+    if(phase===3){
+      setPhase(0); setP(0);
+      if(kIndex<tiles-1) setKIndex(kIndex+1);
+      else { setKIndex(0); setPlaying(false); }
+      return;
+    }
+  }
+
+  useEffect(()=>{
+    if(!playing) return;
+    const ms = Math.max(140, 650/speed);
+    timer.current=setTimeout(nextStep, ms);
+    return ()=>clearTimeout(timer.current);
+  },[playing, speed, phase, p, kIndex, tiles]);
+
+  useEffect(()=>{
+    if(kIndex>=tiles) setKIndex(0);
+  },[tiles]);
+
+  useEffect(()=>{
+    if(playing && phase===0) {
+      const id=setInterval(()=>setWarp(v=>(v+1)%8), Math.max(180,500/speed));
+      return ()=>clearInterval(id);
+    }
+  },[playing,phase,speed]);
+
+  return (
+    <main className="max-w-[1480px] mx-auto px-4 sm:px-6 py-7 sm:py-10">
+
+      {/* Hero */}
+      <header className="mb-6">
+        <div className="card relative overflow-hidden p-6 sm:p-9">
+          <div className="pointer-events-none absolute -top-28 -right-24 w-80 h-80 rounded-full bg-gradient-to-br from-blue-200/45 to-violet-200/40 blur-3xl"/>
+          <div className="pointer-events-none absolute -bottom-32 -left-20 w-72 h-72 rounded-full bg-gradient-to-tr from-emerald-200/35 to-blue-200/30 blur-3xl"/>
+          <div className="relative flex flex-col xl:flex-row xl:items-end xl:justify-between gap-6">
+            <div>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <Pill color="blue">BM = 128</Pill>
+                <Pill color="green">BN = 128</Pill>
+                <Pill color="purple">BK = 8</Pill>
+                <Pill color="slate">BLOCK_SIZE = 256</Pill>
+              </div>
+              <h1 className="text-3xl sm:text-[2.5rem] font-black tracking-tight text-slate-950 leading-tight">
+                CUDA GEMM：Thread Block 级 Tiling 动态图解
+              </h1>
+              <p className="mt-3 text-slate-600 max-w-4xl leading-7">
+                一个 Thread Block 负责一个 128×128 的 C tile。沿 K 维度每次取 A 的 128×8 与 B 的 8×128 子块，
+                协作加载到 Shared Memory，再由 256 个线程在寄存器中累加各自的 8×8 输出。
+              </p>
+            </div>
+            <div className="text-sm text-slate-500 xl:text-right shrink-0">
+              <div>单页交互演示 · React + Tailwind CSS + SVG</div>
+              <div className="mt-1">演示 K 可缩放；K tile 数 = K / BK，BM/BN/BK 按原算法固定</div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* controls */}
+      <section className="glass-bar rounded-2xl p-4 sm:p-5 sticky top-3 z-20 mb-6">
+        <div className="flex flex-col xl:flex-row xl:items-center gap-4 xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={()=>setPlaying(!playing)}
+              className={`btn ${playing?"btn-dark":"btn-blue"}`}>
+              {playing ? "暂停" : "播放"}
+            </button>
+            <button onClick={()=>{setPlaying(false);nextStep();}} className="btn btn-ghost">单步执行</button>
+            <button onClick={reset} className="btn btn-ghost">重置</button>
+            <div className="hidden sm:block w-px h-8 bg-slate-200 mx-1"/>
+            <PhaseBadge phase={phase}/>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <label className="flex items-center gap-2">
+              <span className="text-slate-500">演示 K</span>
+              <select value={demoK} onChange={e=>{setPlaying(false);setDemoK(Number(e.target.value));setKIndex(0);setPhase(0);setP(0);}}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 font-semibold">
+                <option value="32">32</option>
+                <option value="64">64</option>
+                <option value="128">128</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="text-slate-500">速度</span>
+              <input type="range" min=".5" max="3" step=".5" value={speed}
+                     onChange={e=>setSpeed(Number(e.target.value))} className="accent-blue-600"/>
+              <span className="w-8 font-bold">{speed}×</span>
+            </label>
+          </div>
+        </div>
+        <div className="hairline my-4"/>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-bold text-slate-400 shrink-0">K 时间轴</span>
+          <KTimeline tiles={tiles} kIndex={kIndex} setKIndex={(i)=>{setPlaying(false);setKIndex(i);setPhase(0);setP(0)}}/>
+        </div>
+      </section>
+
+      <section className="grid 2xl:grid-cols-2 gap-6">
+        <div className="card p-4 sm:p-5">
+          <SecTitle n="1" title="沿 K 维度逐块推进" right={<Pill color="blue">k = {kIndex*8}</Pill>}>
+            点击上方任意 k 节点，可跳到对应 K tile；K 变化时，上方时间轴会自动增减。
+          </SecTitle>
+          <OverviewSVG kIndex={kIndex} tiles={tiles} phase={phase} p={p} playing={playing}/>
+        </div>
+
+        <div className="card p-4 sm:p-5">
+          <SecTitle n="2" title="数据在内存层级之间流动"
+            right={
+              <div className="text-right">
+                <div className="text-xs text-slate-500">当前 C tile 累计进度</div>
+                <div className="font-black text-lg text-rose-600">{Math.round(accumulation)}%</div>
+              </div>
+            }>
+            动画会随当前阶段改变箭头与缓存区高亮。
+          </SecTitle>
+          <MemoryFlowSVG phase={phase} playing={playing} accumulation={accumulation}/>
+        </div>
+      </section>
+
+
+      <section className="card p-4 sm:p-5 mt-6">
+        <SecTitle n="3" title="256 个线程如何协作加载 As 与 Bs"
+          right={
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+              <span className="text-sm text-slate-500">查看 warp</span>
+              <input type="range" min="0" max="7" value={warp} onChange={e=>{setPlaying(false);setWarp(Number(e.target.value))}} className="accent-emerald-600 w-28"/>
+              <Pill color="green">{warp}</Pill>
+            </div>
+          }>
+          当前高亮 warp 会在播放期间轮换。鼠标悬停单元格可查看 tid。
+        </SecTitle>
+        <ThreadLoadPanel selectedWarp={warp}/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mt-6">
+        <div className="mb-4">
+          <SecTitle n="4" title="每个线程负责 8×8 个输出，并通过 BK=8 次外积完成累加">
+            先选择 tid，观察该线程在 128×128 C tile 中的 64 个跨步输出位置；下方外积动画会同步使用这个 tid 对应的 row/col，并展示 p=0..7 如何逐步累加 Ct[8][8]。
+          </SecTitle>
+        </div>
+        <CThreadDistribution tid={tid} setTid={setTid} p={p} playing={playing} phase={phase}/>
+      </section>
+
+      <section className="grid lg:grid-cols-3 gap-4 mt-6">
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="blue">①</Pill><h3 className="font-black tracking-tight">为什么必须沿 K 切分</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            如果一次把 128×K 的 A 行块与 K×128 的 B 列块全部搬进 Shared Memory，K 稍大就会超出容量。
+            因此只保留 BK=8 的当前工作集。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="green">②</Pill><h3 className="font-black tracking-tight">真正的收益是数据复用</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            一次 Global → Shared 搬运后，As 与 Bs 会被整个 block 的计算重复使用；
+            每个 A 元素会参与多个 N 方向输出，每个 B 元素会参与多个 M 方向输出。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="orange">③</Pill><h3 className="font-black tracking-tight">本例算术强度约 32 FLOPs/Byte</h3></div>
+          <div className="mono text-xs sm:text-sm leading-7 mt-3 text-slate-700">
+            FLOPs = 2·128·128·8 = 262144<br/>
+            Bytes = 4·(128·8 + 8·128) = 8192<br/>
+            AI = 262144 / 8192 = 32
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950 leading-6">
+        <b>一个需要特别注意的准确性细节：</b>
+        对 As 的加载，warp 内 32 个线程不是访问“一段连续 32 float”，而是分成 4 组，每组 8 个线程访问一行连续的 8 float（32B）。
+        对 Bs 的加载则是一个 warp 正好读取一行连续的 32 float（128B）。因此两者的访存形状并不完全相同。
+      </section>
+
+      <footer className="py-10 text-center text-xs text-slate-400">
+        CUDA GEMM Thread Block Tiling · Interactive Teaching Diagram
+      </footer>
+    </main>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

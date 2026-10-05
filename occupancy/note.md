@@ -12,6 +12,30 @@ GPU 的 SM 可能因为资源限制，比如执行单元，寄存器，共享对
 - 共享内存和寄存器类似，每个 SM 有固定大小，所以也影响 Warp （Block 块）的数量。
 - 在结合木桶效应，取最小值可以得到每个 SM 能容纳的 warp 数量。
 
+### 为什么 Occupancy 重要
+
+Occupancy 的核心价值在于**延迟隐藏（Latency Hiding）**。GPU 的执行模型依赖 Warp 切换来掩盖内存访问延迟：
+
+```
+时间线：
+Warp 0: [计算] [等待内存...400cycles...] [计算]
+Warp 1:        [计算] [等待内存...400cycles...] [计算]
+Warp 2:               [计算] [等待内存...400cycles...]
+...
+
+如果活跃 Warp 足够多，调度器总能找到就绪的 Warp 来填充等待期
+
+```
+需要多少 Warp 才能完全隐藏延迟？一个粗略估算：
+
+$$
+\text{Warps needed} \gtrsim \frac{\text{memory latency}}{\text{issue interval per warp}} = \frac{400}{4}
+$$
+
+> 上面的具体数值只是个例子。
+
+但由于一个 SM 最多 N 个 Warp(N 取决于不同的设备)，实际中无法完全隐藏延迟——这正是为什么要让 Occupancy 尽可能高（但不是唯一目标）。
+
 ## 理论 Occupancy 计算例子
 
 ### Block Size 对 Occupancy 的影响
@@ -23,10 +47,11 @@ GPU 的 SM 可能因为资源限制，比如执行单元，寄存器，共享对
 | Threads Per Warp                     | 32    |
 | Max warps per multiprocessor         | 48    |
 | Max Thread Blocks Per Multiprocessor | 24    |
+| Max Threads Per Block                | 1024  |
 
 假设我们每个 thread 都只使用少量的 smem 和 register，因此没有超出关于 shaerd memory 和 register 的限制，而设置 block 大小为 `(32 x 5)`
 
-则一个 Block 的线程数为 160，需要 warp 5 个，而一个 Block 的所有线程必须都在一个 SM 上，而一个 SM 最多涵盖 48 个 warps，因此一个 SM 最多只能分配 $\lfloor 48 / 5 \rfloor = 9$ 个 blocks 即 45 个 warps，因此占用率是 `45 / 48 = 0.937`
+则一个 Block 的线程数为 160，需要 warp 5 个，**而一个 Block 的所有线程必须都在一个 SM 上**，而一个 SM 最多涵盖 48 个 warps，因此一个 SM 最多只能分配 $\lfloor 48 / 5 \rfloor = 9$ 个 blocks 即 45 个 warps，因此占用率是 `45 / 48 = 0.937`
 
 而如果设置 block 为 32，则一个 block 只需要一个 warp，但是由于一个 SM 最多只能含有 24 个 Blocks，因此只有 24 个 warp 用上了，占用率是 0.5.
 
@@ -38,6 +63,7 @@ GPU 的 SM 可能因为资源限制，比如执行单元，寄存器，共享对
 | Register Allocation Unit Size   | 256   |
 | Register Allocation Granularity | Warp  |
 | Warp AllocationGranularity      | 4     |
+| Max Registers per Thread        | 255   |
 
 其中
 
@@ -46,7 +72,36 @@ GPU 的 SM 可能因为资源限制，比如执行单元，寄存器，共享对
 
 例如，对于 BlockSzie = 128，如果不计较寄存器，则此时占有率为 100%。
 
-如果一个线程要 90 个寄存器，则此时一个 warp 总共需要 32 x 90 = 2880 个，但是要根据 256 分，因此需要分配 $\lceil(2880 / 256) \rceil\times 256 = 3072$ 个寄存器。。一个 warp 要 3072 个寄存器，因此一个 SM 最多是 65536 个寄存器，因此一个 SM 上最多只能有 $\lfloor 65536 / 3072 \rfloor = 21$ 个 warps，但是要按照 4 个 warps 来分配，因此最终只能有 20 个 warps，因此占用率是 $20/48 = 0.416$
+如果一个线程要 90 个寄存器，则此时一个 warp 总共需要 32 x 90 = 2880 个，但是要根据 256 分，因此需要分配 $\lceil(2880 / 256) \rceil\times 256 = 3072$ 个寄存器。。一个 warp 要 3072 个寄存器，由于一个 SM 最多是 65536 个寄存器，因此一个 SM 上最多只能有 $\lfloor 65536 / 3072 \rfloor = 21$ 个 warps，但是要按照 4 个 warps 来分配，因此最终只能有 20 个 warps，因此占用率是 $20/48 = 0.416$
+
+💡 提示：可以使用 `__launch_bounds__` 或 `maxrregcount` 编译选项限制寄存器用量：
+
+```c++
+// 方式一：通过 __launch_bounds__(maxThreadsPerBlock, minBlocksPerMultiprocessor) 提示编译器
+访存密集（带宽瓶颈）  __launch_bounds__(N, 大值)  → 提升 occupancy
+计算密集（FLOP瓶颈）  __launch_bounds__(N, 1)     → 保留寄存器
+
+__global__ void __launch_bounds__(256, 2)  // 每 Block 最多256线程，目标每SM 2个Block
+my_kernel(...) { ... }
+
+// 编译器行为
+SM 寄存器总量（A100）= 65536 个/SM
+maxThreadsPerBlock=256, minBlocksPerMultiprocessor=2
+↓
+需要同时驻留：256线程 × 2block = 512线程
+↓
+每线程最大寄存器数：65536 / 512 = 128个
+↓
+编译器将寄存器上限设为 128（通常会更激进压缩）
+↓
+溢出的变量 spill 到 Local Memory（显存）
+
+// 方式二：编译时全局限制
+// nvcc -maxrregcount=32 my_kernel.cu
+
+```
+
+⚠️ 注意：强制限制寄存器数可能导致编译器将变量溢出到局部内存（register spilling），反而降低性能。需要用 profiler 实际验证效果。
 
 ### Shared Memory 对 Occupancy 的影响
 
@@ -59,7 +114,9 @@ GPU 的 SM 可能因为资源限制，比如执行单元，寄存器，共享对
 
 其中 Shared Memory Allocation Unit Size 指的是 Shared memory 只能按照 128 字节进行分配，而 Shared Memory Per Block (bytes) (CUDA runtime) 指的是对于所有 block，即使没有显示使用共享内存，cuda runtime 也会分配 1024 个字节来启动该核。
 
-例如，对于一个 128 个线程的 Block，其中每个 Block 需要显式使用 5000 Bytes 共享内存，则每个 Block 总共需要 1024 + 5000 = 6024 bytes 的共享内存。而只能按照 128 分配的话，也就是 `6024/128 = 47.0625 -> 48 * 128 = 6144 bytes` 的共享内存，而一个 SM 最多只能有 16384 bytes，因此一个 SM 只能有 $\lfloor 16384/6144  \rfloor = 2$ 个 Block，也就是 `2 x 128 / 32 = 8` 个 warp，因此占用率为 $4 / 48 = 0.167$
+> 这个 1 KB 保留是 Maxwell / Pascal 时代驱动的行为，用于驱动自身内部使用。在较新的架构（Volta 及之后）上，这个保留量不一定存在或数值不同。
+
+例如，对于一个 128 个线程的 Block，其中每个 Block 需要显式使用 5000 Bytes 共享内存，则每个 Block 总共需要 1024 + 5000 = 6024 bytes 的共享内存。而只能按照 128 分配的话，也就是 `6024/128 = 47.0625 -> 48 * 128 = 6144 bytes` 的共享内存，而一个 SM 最多只能有 16384 bytes，因此一个 SM 只能有 $\lfloor 16384/6144  \rfloor = 2$ 个 Block，也就是 `2 x 128 / 32 = 8` 个 warp，因此占用率为 $8 / 48 = 0.167$
 
 注意，Shared Memory per multiprocessor (bytes) 是可以配置的，对于计算能力 8.9 的设备，其配置范围为：$[8192, 102400]$, 每次按 2 倍递增。因此，如果我们配置为 102400，则上述其他配置不变的情况下，占用率为 100%。
 
@@ -71,7 +128,7 @@ GPU 的 SM 可能因为资源限制，比如执行单元，寄存器，共享对
 
 ![](https://auto-imgs-1323334286.cos.ap-guangzhou.myqcloud.com/obsidian/20250428112610.png)
 
-首先如上图所示，Ada 结构下（4060）， 一个SM有4个 Warp Scheduler，而 一个 warp 可以运行 48 个 warps，因此一个 warp scheduler 最多利用控制 12 个 warps。
+首先如上图所示，Ada 结构下（4060）， 一个SM有4个 Warp Scheduler，而 一个 SM 可以运行 48 个 warps，因此一个 warp scheduler 最多利用控制 12 个 warps。
 
 一个 warp scheduler 上面有 12 个 warp slots，用于存放等待调度并执行的warp（用于记录每个 warp 的槽位），一个warp 有两种状态，激活的和未被激活的，其中激活的又可以分为三种状态，分别是 stalled(停滞的)，eligible（符合条件的），selected(被选中的)。只有激活的warp才能放入槽中。一个 warp scheduler 一个时钟周期可以 issue 1 个 warp
 

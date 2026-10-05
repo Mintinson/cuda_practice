@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CUDA GEMM Z-order 映射消除 Bank Conflict - Interactive</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(1100px 540px at 6% -8%, rgba(217,119,6,.10), transparent 62%),
+        radial-gradient(900px 480px at 98% 2%, rgba(59,130,246,.09), transparent 60%),
+        radial-gradient(900px 560px at 50% 108%, rgba(124,58,237,.08), transparent 62%),
+        #f7f9fc;
+      color: #0f172a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      background: rgba(255,255,255,.92);
+      border: 1px solid rgba(226,232,240,.95);
+      border-radius: 22px;
+      box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 16px 36px -16px rgba(15,23,42,.16);
+      backdrop-filter: blur(8px);
+      transition: box-shadow .25s ease, transform .25s ease;
+    }
+    .card:hover { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 22px 46px -18px rgba(15,23,42,.22); }
+    .soft-card {
+      border-radius: 18px;
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 1px 2px rgba(15,23,42,.04);
+      transition: box-shadow .2s ease, transform .2s ease;
+    }
+    .soft-card:hover { box-shadow: 0 8px 22px -12px rgba(15,23,42,.28); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .pulse-soft { animation: pulseSoft 1.1s ease-in-out infinite; }
+    @keyframes pulseSoft {
+      0%,100% { opacity: .5; }
+      50% { opacity: 1; }
+    }
+    .conflict-flash { animation: conflictFlash .9s ease-in-out infinite; }
+    @keyframes conflictFlash {
+      0%,100% { filter: drop-shadow(0 0 0 rgba(225,29,72,0)); }
+      50% { filter: drop-shadow(0 0 9px rgba(225,29,72,.6)); }
+    }
+    .num-badge {
+      width: 2.15rem; height: 2.15rem;
+      border-radius: .85rem;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-weight: 900; color: #fff; font-size: .95rem;
+      background: linear-gradient(135deg, #d97706, #dc2626);
+      box-shadow: 0 8px 16px -8px rgba(217,119,6,.9);
+      flex: none;
+    }
+    .glass-bar {
+      background: rgba(255,255,255,.82);
+      border: 1px solid rgba(226,232,240,.9);
+      box-shadow: 0 10px 30px -18px rgba(15,23,42,.35);
+      backdrop-filter: blur(14px);
+    }
+    .btn {
+      border-radius: 12px; font-weight: 700; font-size: .875rem;
+      padding: .5rem .95rem;
+      transition: all .18s ease;
+      box-shadow: 0 1px 2px rgba(15,23,42,.06);
+    }
+    .btn-ghost { background: #fff; border: 1px solid #e2e8f0; color: #334155; }
+    .btn-ghost:hover { background: #f8fafc; border-color: #cbd5e1; transform: translateY(-1px); }
+    .btn-dark { background: #0f172a; color: #fff; border: 1px solid #0f172a; }
+    .btn-dark:hover { transform: translateY(-1px); box-shadow: 0 8px 18px -10px rgba(15,23,42,.9); }
+    .btn-amber { background: linear-gradient(135deg,#d97706,#f59e0b); color: #fff; border: 1px solid #d97706; }
+    .btn-amber:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -10px rgba(217,119,6,.9); }
+    input[type="range"] { height: 1.25rem; }
+    .scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 3px solid rgba(245,158,11,.3);
+      outline-offset: 2px;
+    }
+    .hairline { height: 1px; background: linear-gradient(to right, transparent, #e2e8f0 20%, #e2e8f0 80%, transparent); }
+    svg text { user-select: none; }
+  </style>
+</head>
+
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useEffect, useMemo, useRef, useState } = React;
+
+// -----------------------------------------------------------------
+// 与 matmul_bank.cuh / bank_conflict.md 一致的常量
+//   32 bank × 4B；LDS.128 按 quarter-warp（8 lane）判定事务
+//   warp 4×8，THREAD_TILE 8×8，BLOCK_K=8
+// -----------------------------------------------------------------
+const NBANKS = 32;
+const ADDR_COLORS = ["#2563eb","#059669","#d97706","#dc2626","#7c3aed","#0891b2","#be185d","#65a30d"];
+
+// QW0（lane 0..7）的 float4 读取计划 —— 与 bank_conflict.md §8.4/§8.5.4 的表格一致
+function qwData(tile, zorder) {
+  const lanes = [];
+  for (let lane = 0; lane < 8; lane++) {
+    let start;
+    if (tile === "A") {
+      // tileA（转置存储）：读 smem_A_T[kk][tile_row0 ..]，起始由 lane_row 决定
+      const row = zorder ? lane % 2 : 0;
+      start = row * 8;
+    } else {
+      // tileB：读 smem_B[kk][tile_col0 ..]，起始由 lane_col 决定
+      const col = zorder ? Math.floor(lane / 2) : lane;
+      start = col * (zorder ? 4 : 8);
+    }
+    lanes.push({
+      lane,
+      start,                       // float 索引（行内偏移）
+      b0: start % NBANKS,          // 起始 bank
+      layer: Math.floor(start / NBANKS), // bank layer
+    });
+  }
+  return lanes;
+}
+
+// 统计：unique 地址 / 广播组 / 冲突对 / note.md 口径的 transaction 数
+function qwStats(tile, zorder) {
+  const lanes = qwData(tile, zorder);
+  const byStart = {};
+  lanes.forEach(l => { (byStart[l.start] = byStart[l.start] || []).push(l); });
+  const unique = Object.keys(byStart).length;
+  const broadcastGroups = Object.values(byStart).filter(a => a.length > 1).length;
+  // 冲突对：同一组 bank（b0 相同）、不同 layer（即不同地址）
+  let conflicts = 0;
+  for (let i = 0; i < 8; i++) for (let j = i + 1; j < 8; j++) {
+    if (lanes[i].b0 === lanes[j].b0 && lanes[i].layer !== lanes[j].layer) conflicts++;
+  }
+  const qwTx = tile === "B" && !zorder ? 2 : 1;      // 冲突使 QW 拆成 2 个事务
+  const warpTx = { A: { t: 2, z: 2 }, B: { t: 8, z: 2 } }[tile][zorder ? "z" : "t"]; // note.md 口径
+  return { unique, broadcastGroups, conflicts, qwTx, warpTx };
+}
+
+function Pill({children, color="slate"}) {
+  const styles = {
+    blue:"bg-blue-50 text-blue-700 border-blue-200",
+    green:"bg-emerald-50 text-emerald-700 border-emerald-200",
+    orange:"bg-orange-50 text-orange-700 border-orange-200",
+    amber:"bg-amber-50 text-amber-700 border-amber-200",
+    rose:"bg-rose-50 text-rose-700 border-rose-200",
+    purple:"bg-violet-50 text-violet-700 border-violet-200",
+    cyan:"bg-cyan-50 text-cyan-700 border-cyan-200",
+    slate:"bg-slate-50 text-slate-600 border-slate-200",
+  };
+  return <span className={"inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-semibold tracking-tight "+styles[color]}>{children}</span>
+}
+
+function ProgressBar({value, color="bg-amber-500"}) {
+  return (
+    <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+      <div className={"h-full rounded-full transition-all duration-300 "+color} style={{width:`${Math.max(0,Math.min(100,value))}%`}} />
+    </div>
+  )
+}
+
+function SecTitle({n, title, children, right}) {
+  return (
+    <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4 mb-5">
+      <div className="flex items-start gap-3">
+        <div className="num-badge">{n}</div>
+        <div>
+          <h2 className="text-xl sm:text-[1.4rem] font-black tracking-tight text-slate-900 leading-snug">{title}</h2>
+          {children ? <p className="text-sm text-slate-500 mt-1.5 leading-6 max-w-3xl">{children}</p> : null}
+        </div>
+      </div>
+      {right ? <div className="flex flex-wrap items-center gap-2">{right}</div> : null}
+    </div>
+  )
+}
+
+// =================================================================
+// Section 1：bank 的物理结构 + 三种访问模式
+// =================================================================
+function BankStructure() {
+  const [addr, setAddr] = useState(40); // float 索引
+  const bank = addr % NBANKS;
+  const layer = Math.floor(addr / NBANKS);
+
+  const modes = [
+    {key:"none", name:"无冲突", color:"#059669", desc:"32 线程各走一条车道 → 1 个事务",
+     hits:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0]]},
+    {key:"bcast", name:"广播", color:"#2563eb", desc:"多线程访问同一地址 → 硬件合并，免费",
+     hits:[[0,0],[0,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0]]},
+    {key:"conf", name:"Bank Conflict", color:"#e11d48", desc:"同 bank 不同地址 → 串行化，2 个事务",
+     hits:[[0,0],[1,0],[2,0],[3,0],[0,1],[1,1],[6,0],[7,0]]},
+  ];
+  const [mode, setMode] = useState("conf");
+  const cur = modes.find(m => m.key === mode);
+
+  return (
+    <div className="grid xl:grid-cols-[1fr_1fr] gap-5 items-start">
+      {/* bank 映射 */}
+      <div className="soft-card bg-white p-4">
+        <div className="font-extrabold text-slate-900">地址 → bank 映射</div>
+        <div className="mono text-xs text-slate-500 mt-1">bank(e) = e mod 32（e 为 float 索引，每 bank 4B）· layer(e) = e / 32</div>
+        <div className="mt-3 overflow-x-auto scrollbar-thin">
+          <svg viewBox="0 0 760 150" className="w-full min-w-[560px]">
+            {Array.from({length:NBANKS}).map((_,b)=>(
+              <g key={b}>
+                <rect x={8+b*23} y="46" width="21" height="34" rx="4"
+                      fill={b===bank ? "#fbbf24" : "#f1f5f9"} stroke={b===bank?"#d97706":"#e2e8f0"} strokeWidth={b===bank?2:1}/>
+                {b%4===0 && <text x={8+b*23+10.5} y="96" textAnchor="middle" fontSize="8.5" fill="#94a3b8">{b}</text>}
+              </g>
+            ))}
+            <text x="8" y="26" fontSize="11" fontWeight="700" fill="#475569">32 个 bank（每 4 字节一格，循环往复）</text>
+            <text x={8+bank*23+10.5} y="40" textAnchor="middle" fontSize="10" fontWeight="800" fill="#b45309">▲ bank {bank}</text>
+            <text x="8" y="126" fontSize="10.5" fill="#64748b">
+              当前 e = {addr} → bank {bank} · layer {layer}
+              <tspan fill="#b45309" fontWeight="700">（每 32×4 = 128B，bank 编号回到 0 —— 这就是“层”）</tspan>
+            </text>
+          </svg>
+        </div>
+        <input type="range" min="0" max="255" value={addr} onChange={e=>setAddr(Number(e.target.value))} className="w-full mt-2 accent-amber-600"/>
+        <div className="mt-2 rounded-xl bg-amber-50 border border-amber-100 px-3 py-2.5 text-xs leading-6 text-amber-950">
+          <b>为什么恰好是 32 个 bank：</b>理想情况下 warp 的 32 个线程各访问一个 bank，一个时钟周期全部完成 —— 这是共享内存峰值带宽的设计前提。
+          每个 bank 像一条单车道：每周期只能服务一次 4B 访问。
+        </div>
+      </div>
+
+      {/* 三种访问模式 */}
+      <div className="soft-card bg-white p-4">
+        <div className="flex flex-wrap gap-2 mb-3">
+          {modes.map(m=>(
+            <button key={m.key} onClick={()=>setMode(m.key)}
+              className={`btn ${mode===m.key?"btn-dark":"btn-ghost"}`}>{m.name}</button>
+          ))}
+        </div>
+        <div className="text-sm font-bold text-slate-900">{cur.name}</div>
+        <div className="text-xs text-slate-500 mt-0.5">{cur.desc}</div>
+        <div className="overflow-x-auto scrollbar-thin mt-3">
+          <svg viewBox="0 0 400 190" className="w-full min-w-[340px]">
+            {/* 8 个 lane → bank 0..7 */}
+            {Array.from({length:8}).map((_,b)=>(
+              <rect key={"bk"+b} x={24+b*46} y="20" width="38" height="26" rx="5" fill="#f8fafc" stroke="#cbd5e1"/>
+            ))}
+            {Array.from({length:8}).map((_,b)=>(
+              <text key={"bt"+b} x={24+b*46+19} y="37" textAnchor="middle" fontSize="9.5" fill="#64748b">bank{b}</text>
+            ))}
+            {cur.hits.map((h,i)=>{
+              const x = 24 + h[0]*46 + 19;
+              const conflict = cur.key==="conf" && i>=4 && h[1]===1;
+              const bcast = cur.key==="bcast" && i===1;
+              return (
+                <g key={"ln"+i}>
+                  <line x1={x} x2={x} y1="76" y2={118+h[1]*30} stroke={cur.color} strokeWidth="2.4"
+                        className={(conflict||bcast)?"pulse-soft":""} opacity={0.85}/>
+                  <text x={x} y={134+h[1]*30} textAnchor="middle" fontSize="9" fill="#334155">l{i}</text>
+                  <text x={x} y={146+h[1]*30} textAnchor="middle" fontSize="8" fill={conflict?"#e11d48":"#94a3b8"}>
+                    {conflict ? "L1" : "L0"}
+                  </text>
+                </g>
+              );
+            })}
+            {cur.key==="conf" && (
+              <g>
+                <path d="M43 96 L43 100 L89 100 L89 96" fill="none" stroke="#e11d48" strokeWidth="1.6" strokeDasharray="4 3"/>
+                <text x="66" y="112" textAnchor="middle" fontSize="9" fontWeight="800" fill="#e11d48">同 bank 不同层</text>
+              </g>
+            )}
+            <text x="200" y="182" textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#334155">
+              {cur.key==="none" ? "1 个 memory transaction" : cur.key==="bcast" ? "1 个 transaction（广播免费）" : "2 个 transaction（串行）"}
+            </text>
+          </svg>
+        </div>
+        <div className="mt-2 rounded-xl bg-slate-50 border px-3 py-2.5 text-xs leading-6 text-slate-600">
+          关键点：bank conflict 只在 <b>warp 内部</b>定义；广播（同地址）是免费的，冲突（同 bank 不同地址）才要串行。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 2：LDS.128 的 quarter-warp 事务粒度 + 跨 QW 合并条件
+// =================================================================
+function QWGranularity() {
+  const [cond, setCond] = useState("A");
+  const pairOffset = cond === "A" ? 1 : 2;
+  return (
+    <div className="grid xl:grid-cols-[1.1fr_.9fr] gap-5 items-start">
+      <div className="soft-card bg-white p-4">
+        <div className="font-extrabold text-slate-900">float4（LDS.128）按 quarter-warp 判定事务</div>
+        <div className="text-xs text-slate-500 mt-1 leading-6">
+          每线程 16B → warp 共 512B，硬件拆成 4 个 phase，每个 phase 由 8 个 lane（一个 QW）的 128B 请求独立判定冲突。
+          分析 float4 访存时只需要盯住 8 个 lane。
+        </div>
+        <div className="overflow-x-auto scrollbar-thin mt-3">
+          <svg viewBox="0 0 760 130" className="w-full min-w-[560px]">
+            {Array.from({length:32}).map((_,l)=>{
+              const qw = Math.floor(l/8);
+              const colors = ["#dbeafe","#d1fae5","#fef3c7","#fce7f3"];
+              return (
+                <g key={"l"+l}>
+                  <rect x={8+l*23.4} y="34" width="21" height="30" rx="4" fill={colors[qw]} stroke="#e2e8f0"/>
+                  <text x={8+l*23.4+10.5} y="53" textAnchor="middle" fontSize="8" fill="#475569">{l}</text>
+                </g>
+              );
+            })}
+            {[["QW0 · 8 lane × 16B = 128B 请求", 8],["QW1", 8],["QW2", 8],["QW3", 8]].map(([t],i)=>(
+              <text key={"qw"+i} x={8+i*4*23.4+42} y="86" textAnchor="middle" fontSize="9.5" fontWeight="700" fill="#475569">
+                {i===0 ? t : "QW"+i}
+              </text>
+            ))}
+            <text x="8" y="114" fontSize="10.5" fill="#64748b">LDS.32 → 全 warp 一起判定 · LDS.64 → half-warp · LDS.128 → quarter-warp（8 lane）</text>
+          </svg>
+        </div>
+      </div>
+
+      <div className="soft-card bg-white p-4">
+        <div className="flex flex-wrap gap-2 mb-2">
+          <button onClick={()=>setCond("A")} className={`btn ${cond==="A"?"btn-dark":"btn-ghost"}`}>条件 A：i 与 i⊕1</button>
+          <button onClick={()=>setCond("B")} className={`btn ${cond==="B"?"btn-dark":"btn-ghost"}`}>条件 B：i 与 i⊕2</button>
+        </div>
+        <div className="text-xs text-slate-600 leading-6">
+          CC 7.0+ 上，若 warp 内 lane <span className="mono font-bold">i</span> 与 lane <span className="mono font-bold">i⊕{pairOffset}</span> 访问相同地址（或其一不活跃），
+          LDS.128 的请求数可从 4 <b>减半到 2</b>。Z-order 映射正是精心构造了这两个条件。
+        </div>
+        <div className="overflow-x-auto scrollbar-thin mt-3">
+          <svg viewBox="0 0 760 96" className="w-full min-w-[560px]">
+            {Array.from({length:32}).map((_,l)=>(
+              <g key={"pl"+l}>
+                <rect x={8+l*23.4} y="24" width="21" height="24" rx="4" fill="#f8fafc" stroke="#e2e8f0"/>
+                <text x={8+l*23.4+10.5} y="40" textAnchor="middle" fontSize="8" fill="#64748b">{l}</text>
+              </g>
+            ))}
+            {Array.from({length: pairOffset===1 ? 16 : 15}).map((_,p)=>{
+              const a = p*(pairOffset===1?2:1);
+              const b = a + pairOffset;
+              if (b > 31) return null;
+              const x1 = 8+a*23.4+10.5, x2 = 8+b*23.4+10.5;
+              return <path key={"pr"+p} d={`M${x1} 56 L${x1} 68 L${x2} 68 L${x2} 56`} fill="none" stroke="#7c3aed" strokeWidth="1.6"/>;
+            })}
+            <text x="8" y="88" fontSize="10" fill="#7c3aed" fontWeight="700">
+              {cond==="A" ? "xor 1 只翻转 bit 0 → 配对 (0,1)(2,3)(4,5)…" : "xor 2 只翻转 bit 1 → 配对 (0,2)(1,3)(4,6)(5,7)…"}
+            </text>
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 3/4 核心：bank 占用沙盘（QW0 的 8 个 lane）
+// =================================================================
+function BankPlayground({tile, zorder, phase, playing}) {
+  const lanes = useMemo(()=>qwData(tile, zorder), [tile, zorder]);
+  const stats = useMemo(()=>qwStats(tile, zorder), [tile, zorder]);
+  const byStart = useMemo(()=>{
+    const m = {};
+    lanes.forEach(l => { (m[l.start] = m[l.start] || []).push(l.lane); });
+    return m;
+  }, [lanes]);
+  const startOrder = Object.keys(byStart).map(Number).sort((a,b)=>a-b);
+  const colorOf = start => ADDR_COLORS[startOrder.indexOf(start) % ADDR_COLORS.length];
+  const conflictPairs = useMemo(()=>{
+    const pairs = [];
+    for (let i=0;i<8;i++) for (let j=i+1;j<8;j++) {
+      if (lanes[i].b0===lanes[j].b0 && lanes[i].layer!==lanes[j].layer) pairs.push([i,j]);
+    }
+    return pairs;
+  }, [lanes]);
+
+  const x0 = 118, y0 = 74, colW = 24.6, rowH = 46;
+  const summary = phase >= 8;
+
+  const comboName = `${tile==="A"?"tileA（转置存储）":"tileB（行主序）"} · ${zorder?"Z-order":"行主序"}`;
+  const warpTx = stats.warpTx;
+
+  return (
+    <div className="grid xl:grid-cols-[minmax(600px,1fr)_300px] gap-4 items-start">
+      <div className="soft-card bg-white p-4 overflow-x-auto scrollbar-thin">
+        <svg viewBox="0 0 940 320" className="w-full min-w-[620px]">
+          <text x="14" y="26" fontSize="13.5" fontWeight="800" fill="#0f172a">QW0（lane 0–7）一次 float4 读取的 bank 占用 —— {comboName}</text>
+          <text x="14" y="46" fontSize="11" fill="#64748b">
+            {tile==="A"
+              ? "每个 lane 读 smem_A_T[kk][tile_row0..] 的 float4，地址由 lane_row 决定"
+              : "每个 lane 读 smem_B[kk][tile_col0..] 的 float4，地址由 lane_col 决定（同 QW 同层）"}
+          </text>
+
+          {/* bank 列 */}
+          {Array.from({length:NBANKS}).map((_,b)=>(
+            <g key={"bg"+b}>
+              <rect x={x0+b*colW} y={y0} width={colW-2.4} height={rowH*2} rx="3" fill={b%2? "#fafafa":"#f4f4f5"} stroke="#e4e4e7"/>
+              {b%4===0 && <text x={x0+b*colW+(colW-2.4)/2} y={y0-8} textAnchor="middle" fontSize="8.5" fill="#94a3b8">{b}</text>}
+            </g>
+          ))}
+          {[0,1].map(L=>(
+            <text key={"ly"+L} x={x0-10} y={y0+L*rowH+rowH/2+4} textAnchor="end" fontSize="10" fill="#64748b" fontWeight={700}>
+              layer {L}
+            </text>
+          ))}
+
+          {/* lane 的 float4 占用条 */}
+          {lanes.map((l,i)=>{
+            const active = summary || phase === i;
+            const visited = summary || phase >= i;
+            const color = colorOf(l.start);
+            const groupSize = byStart[l.start].length;
+            return (
+              <g key={"bar"+i} opacity={visited ? 1 : 0.18}>
+                <rect x={x0+l.b0*colW+1.5} y={y0+l.layer*rowH+5} width={colW*4-5} height={rowH-10} rx="7"
+                      fill={color} opacity={active?0.92:0.5}
+                      stroke={active? "#0f172a" : color} strokeWidth={active?2.2:1}
+                      className={active&&playing?"pulse-soft":""}/>
+                <text x={x0+l.b0*colW+colW*2} y={y0+l.layer*rowH+rowH/2-1} textAnchor="middle"
+                      fontSize="10.5" fontWeight="800" fill="#fff">lane {l.lane}</text>
+                <text x={x0+l.b0*colW+colW*2} y={y0+l.layer*rowH+rowH/2+13} textAnchor="middle"
+                      fontSize="8.5" fill="rgba(255,255,255,.92)">+{l.start} · {groupSize>1?`${groupSize} 路广播`:"独占"}</text>
+              </g>
+            );
+          })}
+
+          {/* 冲突标注 */}
+          {conflictPairs.map(([i,j],idx)=>(
+            <g key={"cf"+idx}>
+              <rect x={x0+lanes[i].b0*colW-1} y={y0+2} width={colW*4+1} height={rowH*2-4} rx="9"
+                    fill="none" stroke="#e11d48" strokeWidth="2" strokeDasharray="6 4" className="conflict-flash"/>
+            </g>
+          ))}
+          {conflictPairs.length>0 && (
+            <text x={x0} y={y0+rowH*2+22} fontSize="10.5" fontWeight="800" fill="#e11d48">
+              {conflictPairs.map(([i,j])=>`lane${i}↔lane${j}`).join("、")}：同 bank 不同层 → 2-way conflict，QW 拆成 2 个事务
+            </text>
+          )}
+
+          {/* 汇总 */}
+          {summary && (
+            <g>
+              <text x="14" y="268" fontSize="11.5" fontWeight="800" fill="#0f172a">
+                事务归并：{stats.unique} 个不同地址
+                {stats.broadcastGroups>0 ? ` · ${stats.broadcastGroups} 组广播` : ""}
+                {stats.conflicts>0 ? ` · ${stats.conflicts} 对冲突（QW 拆为 2 个事务）` : " · 无冲突"}
+              </text>
+              <text x="14" y="290" fontSize="11" fill="#475569">
+                {tile==="A"
+                  ? (zorder ? "QW 内 2 个地址、各 4 路广播，落在不同 bank → 无冲突；lane i 与 i⊕2 同地址 → 满足条件 B，跨 QW 合并"
+                            : "QW 内 1 个地址、8 路广播 → 1 个事务；lane i 与 i⊕1 同地址 → 满足条件 A")
+                  : (zorder ? "QW 内 4 个地址、各 2 路广播，铺满 bank 0–15 同一层 → 无冲突；lane i 与 i⊕1 同地址 → 满足条件 A"
+                            : "lane 间距 8 float = 8 个 bank → lane0 与 lane4 落回同组 bank 的下一层 → 每 QW 拆成 2 个事务")}
+              </text>
+            </g>
+          )}
+          {!summary && (
+            <text x="14" y="272" fontSize="11" fill="#94a3b8">
+              播放/单步：逐个 lane 发起访问；第 9 步给出事务归并结果。
+            </text>
+          )}
+        </svg>
+      </div>
+
+      <div className="space-y-3">
+        <div className="soft-card bg-white p-4">
+          <div className="text-xs text-slate-500">当前组合</div>
+          <div className="font-black text-slate-900 mt-1">{comboName}</div>
+          <div className="mt-3 space-y-2 text-sm">
+            <div className="flex justify-between"><span className="text-slate-500">QW 内不同地址</span><span className="mono font-bold">{stats.unique}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">广播组</span><span className="mono font-bold text-blue-700">{stats.broadcastGroups||"—"}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">bank 冲突对</span><span className={`mono font-bold ${stats.conflicts?"text-rose-600":"text-emerald-600"}`}>{stats.conflicts||"0"}</span></div>
+            <div className="h-px bg-slate-100"/>
+            <div className="flex justify-between"><span className="text-slate-500">QW 事务数</span><span className="mono font-bold">{stats.qwTx}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">warp 事务数（note 口径）</span><span className={`mono font-black ${warpTx<=2?"text-emerald-600":"text-rose-600"}`}>{warpTx}</span></div>
+          </div>
+          <div className="mt-3"><ProgressBar value={(Math.min(phase,8)/8)*100} color={stats.conflicts?"bg-rose-500":"bg-emerald-500"}/></div>
+          <div className="mt-1 text-[11px] text-slate-400">访问进度 {Math.min(phase+1,9)} / 9</div>
+        </div>
+        <div className={`rounded-xl border px-3 py-3 text-xs leading-6 ${stats.conflicts ? "bg-rose-50 border-rose-200 text-rose-900" : "bg-emerald-50 border-emerald-200 text-emerald-900"}`}>
+          {stats.conflicts
+            ? <>冲突使每个 QW 的请求串行化：带宽直接除以 2，而且每一轮 kk 都要再付一遍。</>
+            : <>广播与合并不额外花钱 —— 这正是“调整线程映射”比“加 padding”更优雅的原因。</>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 5：四种方案对比
+// =================================================================
+function SolutionCompare() {
+  const rows = [
+    {name:"基线（行主序 4×8）", tx:10, align:true, extra:"无", write:"简单", bar:10},
+    {name:"方案一 Padding", tx:6, align:false, extra:"+4 列", write:"简单", bar:6},
+    {name:"方案二 XOR Swizzle", tx:4, align:true, extra:"无", write:"需异或", bar:4},
+    {name:"方案三 4×4 拆分", tx:6, align:true, extra:"无", write:"scatter", bar:6},
+    {name:"方案四 Z-order 映射", tx:4, align:true, extra:"无", write:"scatter", bar:4, best:true},
+  ];
+  const [pad, setPad] = useState(false);
+  const rowBank = c => (pad ? (c*132/4) % 32 : 0); // 每行起始 bank：132 float/行 → 错开 1
+  return (
+    <div className="grid xl:grid-cols-[1.1fr_.9fr] gap-5 items-start">
+      <div className="soft-card bg-white p-4">
+        <div className="font-extrabold text-slate-900 mb-1">每 warp 每 K 步的 memory transaction 数</div>
+        <div className="overflow-x-auto scrollbar-thin">
+          <svg viewBox="0 0 640 230" className="w-full min-w-[520px]">
+            {rows.map((r,i)=>{
+              const y = 18+i*42;
+              const w = r.bar/10*380;
+              return (
+                <g key={i}>
+                  <text x="8" y={y+18} fontSize="11" fontWeight={r.best?800:600} fill={r.best?"#6d28d9":"#334155"}>{r.name}</text>
+                  <rect x="170" y={y+4} width={w} height="22" rx="7" fill={r.best?"#7c3aed":"#94a3b8"} opacity={r.best?0.95:0.75}/>
+                  <text x={170+w+10} y={y+20} fontSize="12" fontWeight="800" fill={r.best?"#6d28d9":"#475569"}>{r.tx}</text>
+                  {r.best && <text x={170+w+42} y={y+20} fontSize="10" fontWeight="800" fill="#7c3aed">↓60%</text>}
+                </g>
+              );
+            })}
+            <text x="170" y="228" fontSize="10" fill="#94a3b8">← 更少的事务 = 更少的共享内存串行化</text>
+          </svg>
+        </div>
+        <div className="mt-1 text-xs leading-6 text-slate-500">
+          本质区别：Padding / Swizzle 在<b>物理层面</b>错开地址；4×4 拆分 / Z-order 在<b>逻辑层面</b>调整线程与数据的对应关系。
+          Z-order 是唯一让 tileA、tileB 同时达到最优的方案。
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="soft-card bg-white p-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-extrabold text-slate-900">Padding 原理速览</div>
+            <button onClick={()=>setPad(!pad)} className="btn btn-ghost text-xs">{pad?"✓ 已加 4 列 padding":"加 4 列 padding"}</button>
+          </div>
+          <div className="overflow-x-auto scrollbar-thin mt-2">
+            <svg viewBox="0 0 360 130" className="w-full min-w-[300px]">
+              {[0,1,2].map(r=>(
+                <g key={"pr"+r}>
+                  <rect x="10" y={14+r*36} width="300" height="26" rx="5" fill="#eff6ff" stroke="#bfdbfe"/>
+                  {Array.from({length:8}).map((_,c)=>(
+                    <rect key={"pc"+r+"-"+c} x={10+c*37.5} y={14+r*36} width="36" height="26" rx="5"
+                          fill="#dbeafe" opacity="0.7" stroke="#93c5fd"/>
+                  ))}
+                  <text x={10+rowBank(r)*9.4+4} y={31+r*36} fontSize="9" fontWeight="800" fill="#b45309">
+                    行{r} 起始 bank {rowBank(r)}
+                  </text>
+                </g>
+              ))}
+              <text x="10" y="124" fontSize="10" fill={pad?"#059669":"#e11d48"} fontWeight="700">
+                {pad ? "每行错开 1 个 bank → 跨行同列不再冲突 ✓（但 132×4=528B 破坏 float4 对齐 ✗）"
+                     : "每行起始都在 bank 0 → 跨行读同一列必然冲突"}
+              </text>
+            </svg>
+          </div>
+        </div>
+        <div className="soft-card bg-white p-4">
+          <div className="font-extrabold text-slate-900">XOR Swizzle 原理速览</div>
+          <div className="overflow-x-auto scrollbar-thin mt-2">
+            <svg viewBox="0 0 360 130" className="w-full min-w-[300px]">
+              {[0,1,2].map(r=>(
+                <g key={"sr"+r}>
+                  {[0,1,2,3,4,5,6,7].map(c=>{
+                    const shifted = ((c + r*4) % 8);
+                    return (
+                      <rect key={"sc"+r+"-"+c} x={10+shifted*42} y={14+r*30} width="40" height="24" rx="4"
+                            fill="#ecfdf5" stroke="#6ee7b7"/>
+                    );
+                  })}
+                  <text x="352" y={31+r*30} textAnchor="end" fontSize="9" fill="#047857" fontWeight="700">k={r}：整行右移 {(r*4)%8}</text>
+                </g>
+              ))}
+              <text x="10" y="120" fontSize="10" fill="#047857" fontWeight="700">写入时 col^(k·4)、读取时同样反算 → 不加空间、保持对齐，代价是异或指令</text>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// Section 6：写回的代价
+// =================================================================
+function WriteBackPanel() {
+  const zCols = Array.from({length:16}, (_,lane)=>{
+    const col = Math.floor((lane%16)/2);
+    return col*8;
+  });
+  const rCols = Array.from({length:16}, (_,lane)=>lane*8);
+  return (
+    <div className="grid xl:grid-cols-2 gap-5 items-start">
+      <div className="soft-card bg-white p-4">
+        <div className="font-extrabold text-slate-900">warp 前 16 个 lane 的 tile_col0</div>
+        <div className="overflow-x-auto scrollbar-thin mt-3">
+          <svg viewBox="0 0 760 150" className="w-full min-w-[560px]">
+            {rCols.map((c,l)=>(
+              <g key={"r"+l}>
+                <rect x={8+l*23.4} y="22" width="21" height="26" rx="4" fill="#fef3c7" stroke="#fcd34d"/>
+                <text x={8+l*23.4+10.5} y="39" textAnchor="middle" fontSize="7.5" fill="#92400e">{c}</text>
+              </g>
+            ))}
+            {zCols.map((c,l)=>(
+              <g key={"z"+l}>
+                <rect x={8+l*23.4} y="86" width="21" height="26" rx="4"
+                      fill={l%2===0?"#ddd6fe":"#c4b5fd"} stroke="#a78bfa"/>
+                <text x={8+l*23.4+10.5} y="103" textAnchor="middle" fontSize="7.5" fill="#4c1d95">{c}</text>
+              </g>
+            ))}
+            <text x="8" y="14" fontSize="10.5" fontWeight="700" fill="#92400e">行主序：相邻 lane 列连续</text>
+            <text x="8" y="78" fontSize="10.5" fontWeight="700" fill="#5b21b6">Z-order：成对重复（lane 2k 与 2k+1 同列）</text>
+            <text x="8" y="136" fontSize="10" fill="#64748b">数字 = tile_col0（每 tile 8 列宽）</text>
+          </svg>
+        </div>
+      </div>
+      <div className="soft-card bg-white p-4 text-sm text-slate-600 leading-7">
+        <div className="font-extrabold text-slate-900">这是一笔划算的交易</div>
+        <ul className="mt-2 list-disc pl-5 space-y-1.5">
+          <li>Z-order 后相邻 lane 的 <span className="mono">tile_col0</span> 成对重复，写回 Global 时地址不再严格连续 —— 只能部分合并。</li>
+          <li>但写回<b>整个 K 循环只发生一次</b>，而共享内存读取<b>每个 kk 都发生</b>（8 次 / K tile）。</li>
+          <li>用最后一次的少量散写，换每一次迭代的事务数 10 → 4，<b>收益远大于代价</b>。</li>
+          <li>同一 QW 内 4 个不同 tile_col0 仍铺满一段连续 bank，写回并非完全随机。</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+// =================================================================
+// App
+// =================================================================
+function App(){
+  const [playing,setPlaying]=useState(true);
+  const [phase,setPhase]=useState(0);        // 0..7 逐 lane，8+ 汇总
+  const [tile,setTile]=useState("B");        // 先看冲突更直观
+  const [zorder,setZorder]=useState(false);
+  const timer=useRef(null);
+
+  useEffect(()=>{
+    if(!playing) return;
+    timer.current=setTimeout(()=>setPhase(p=>(p+1)%10), 750);
+    return ()=>clearTimeout(timer.current);
+  },[playing, phase]);
+
+  const stats = qwStats(tile, zorder);
+  const warpTx = stats.warpTx;
+
+  return (
+    <main className="max-w-[1480px] mx-auto px-4 sm:px-6 py-7 sm:py-10">
+
+      <header className="mb-6">
+        <div className="card relative overflow-hidden p-6 sm:p-9">
+          <div className="pointer-events-none absolute -top-28 -right-24 w-80 h-80 rounded-full bg-gradient-to-br from-amber-200/45 to-rose-200/40 blur-3xl"/>
+          <div className="pointer-events-none absolute -bottom-32 -left-20 w-72 h-72 rounded-full bg-gradient-to-tr from-violet-200/35 to-amber-200/30 blur-3xl"/>
+          <div className="relative flex flex-col xl:flex-row xl:items-end xl:justify-between gap-6">
+            <div>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <Pill color="amber">32 bank × 4B</Pill>
+                <Pill color="blue">LDS.128 → quarter-warp 判定</Pill>
+                <Pill color="purple">Z-order：lane 2×4 化</Pill>
+                <Pill color="rose">每 warp 每 K 步 10 → 4 事务（↓60%）</Pill>
+              </div>
+              <h1 className="text-3xl sm:text-[2.5rem] font-black tracking-tight text-slate-950 leading-tight">
+                CUDA GEMM：Z-order 映射消除 Bank Conflict 动图解
+              </h1>
+              <p className="mt-3 text-slate-600 max-w-4xl leading-7">
+                对应 <span className="mono font-semibold">matmul_bank.cuh</span>（笔记 §8 与 bank_conflict.md）。
+                访存量压到最低之后，最后一关是<b>共享内存的串行化</b>：多个 lane 挤进同一 bank 的不同地址时，硬件只能排队。
+                Z-order 只改两行 lane 映射，不改任何数据布局，就让每 warp 每 K 步的 memory transaction 从 10 降到 4。
+              </p>
+            </div>
+            <div className="text-sm text-slate-500 xl:text-right shrink-0">
+              <div>单页交互演示 · React + Tailwind CSS + SVG</div>
+              <div className="mt-1">前置知识：<a className="text-blue-600 font-semibold hover:underline" href="./gemm_vectorized_interactive.html">float4 向量化</a></div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section className="glass-bar rounded-2xl p-4 sm:p-5 sticky top-3 z-20 mb-6">
+        <div className="flex flex-col xl:flex-row xl:items-center gap-4 xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={()=>setPlaying(!playing)} className={`btn ${playing?"btn-dark":"btn-amber"}`}>
+              {playing ? "暂停" : "播放"}
+            </button>
+            <button onClick={()=>{setPlaying(false);setPhase(p=>(p+1)%10);}} className="btn btn-ghost">单步执行</button>
+            <button onClick={()=>{setPlaying(false);setPhase(0);}} className="btn btn-ghost">重置</button>
+            <div className="hidden sm:block w-px h-8 bg-slate-200 mx-1"/>
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+              <span className="text-sm text-slate-500">读取对象</span>
+              <button onClick={()=>setTile("A")} className={`btn ${tile==="A"?"btn-dark":"btn-ghost"} !py-1 !px-2.5 text-xs`}>tileA（转置）</button>
+              <button onClick={()=>setTile("B")} className={`btn ${tile==="B"?"btn-dark":"btn-ghost"} !py-1 !px-2.5 text-xs`}>tileB</button>
+            </div>
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+              <span className="text-sm text-slate-500">lane 映射</span>
+              <button onClick={()=>setZorder(false)} className={`btn ${!zorder?"btn-dark":"btn-ghost"} !py-1 !px-2.5 text-xs`}>行主序</button>
+              <button onClick={()=>setZorder(true)} className={`btn ${zorder?"btn-dark":"btn-ghost"} !py-1 !px-2.5 text-xs`}>Z-order</button>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-slate-500">warp 事务数（当前组合）</div>
+            <div className={`font-black text-xl leading-6 ${warpTx<=2?"text-emerald-600":"text-rose-600"}`}>{warpTx}</div>
+          </div>
+        </div>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="1" title="bank 的物理结构：32 条单车道">
+          共享内存被切成 32 个 bank，每 bank 宽 4 字节；地址每跨 128B 回到 bank 0（称为新一层）。
+          拖动滑块观察任意地址落在哪个 bank 的哪一层。
+        </SecTitle>
+        <BankStructure/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="2" title="float4 改变了冲突的判定粒度">
+          LDS.128 把 warp 拆成 4 个 quarter-warp 独立判定 —— 这既简化了分析（只看 8 个 lane），也带来了 CC 7.0+ 的跨 QW 合并机会（条件 A / B）。
+        </SecTitle>
+        <QWGranularity/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="3" title="沙盘推演：行主序 vs Z-order（本篇核心）"
+          right={<Pill color="amber">{tile==="A"?"读 tileA":"读 tileB"} · {zorder?"Z-order":"行主序"}</Pill>}>
+          用顶部按钮切换四种组合，播放/单步观察 QW0 的 8 个 lane 如何占用 bank：
+          行主序读 tileB 会出现 4 对“同 bank 不同层”的 2-way 冲突；切到 Z-order 后同样的读取全部变成广播，零冲突。
+        </SecTitle>
+        <BankPlayground tile={tile} zorder={zorder} phase={phase} playing={playing}/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="4" title="Z-order 的代码：只改两行映射">
+          对比 <span className="mono">matmul_vec.cuh</span>，加载、外积、写回全部不变，只有 lane 到 (row, col) 的映射换了：
+        </SecTitle>
+        <div className="grid lg:grid-cols-2 gap-4">
+          <div className="soft-card bg-white p-4">
+            <div className="text-sm font-extrabold text-rose-700 mb-2">原（行主序）· QW 形状 1×8</div>
+            <pre className="mono text-xs leading-6 bg-slate-50 border rounded-xl p-3 overflow-x-auto scrollbar-thin">{`lane_row = lane_id / 8;      // 0~3
+lane_col = lane_id % 8;      // 0~7`}</pre>
+            <div className="overflow-x-auto scrollbar-thin mt-3">
+              <svg viewBox="0 0 360 120" className="w-full min-w-[300px]">
+                {[0,1,2,3].flatMap(r=>[0,1,2,3,4,5,6,7].map(c=>{
+                  const lane = r*8+c;
+                  return (
+                    <g key={"rm"+lane}>
+                      <rect x={40+c*40} y={10+r*26} width="36" height="22" rx="4" fill={r===0?"#dbeafe":"#f1f5f9"} stroke="#e2e8f0"/>
+                      <text x={40+c*40+18} y={25+r*26} textAnchor="middle" fontSize="9.5" fontWeight="700" fill="#334155">{lane}</text>
+                    </g>
+                  );
+                }))}
+                {[0,1,2,3].map(r=><text key={"rl"+r} x="30" y={25+r*26} textAnchor="end" fontSize="8.5" fill="#94a3b8">r{r}</text>)}
+                <text x="40" y="116" fontSize="9.5" fill="#64748b">QW0 = 第 0 行整行（1×8）· 蓝色 = QW0</text>
+              </svg>
+            </div>
+          </div>
+          <div className="soft-card bg-white p-4">
+            <div className="text-sm font-extrabold text-emerald-700 mb-2">新（Z-order）· QW 形状 2×4</div>
+            <pre className="mono text-xs leading-6 bg-slate-50 border rounded-xl p-3 overflow-x-auto scrollbar-thin">{`lane_row = lane_id % 2 + (lane_id / 16) * 2;  // 0~3
+lane_col = (lane_id % 16) / 2;                // 0~7`}</pre>
+            <div className="overflow-x-auto scrollbar-thin mt-3">
+              <svg viewBox="0 0 360 120" className="w-full min-w-[300px]">
+                {[0,1,2,3].flatMap(r=>[0,1,2,3,4,5,6,7].map(c=>{
+                  // Z-order 网格中位置 (r,c) 上的 lane 号
+                  const lane = (c*2)%16 + (r%2) + Math.floor(r/2)*16;
+                  return (
+                    <g key={"zm"+r+"-"+c}>
+                      <rect x={40+c*40} y={10+r*26} width="36" height="22" rx="4"
+                            fill={r<2?"#ddd6fe":"#f1f5f9"} stroke="#e2e8f0"/>
+                      <text x={40+c*40+18} y={25+r*26} textAnchor="middle" fontSize="9.5" fontWeight="700" fill="#334155">{lane}</text>
+                    </g>
+                  );
+                }))}
+                {[0,1,2,3].map(r=><text key={"zl"+r} x="30" y={25+r*26} textAnchor="end" fontSize="8.5" fill="#94a3b8">r{r}</text>)}
+                <text x="40" y="116" fontSize="9.5" fill="#64748b">QW0 = lane 0–7 → 前 2 行 × 4 列（2×4）· 紫色 = QW0∪QW1</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 rounded-xl bg-violet-50 border border-violet-100 px-4 py-3 text-xs leading-6 text-violet-950">
+          <b>映射的巧思：</b>QW 内只覆盖 2 个 lane_row 与 4 个 lane_col —— tileA 与 tileB 的读取都能在 QW 内触发广播；
+          同时 <span className="mono">xor 1</span> 只改 lane_row（tileB 同地址 → 条件 A）、<span className="mono">xor 2</span> 只改 lane_col（tileA 同地址 → 条件 B），
+          两个合并条件都被精确命中。
+        </div>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="5" title="四种消除方案横向对比">
+          从 10 到 4，减少 60% 的 memory transaction。若共享内存带宽是瓶颈（前几步优化之后它常常就是），
+          这约等于 10~30% 的端到端提升。
+        </SecTitle>
+        <SolutionCompare/>
+      </section>
+
+      <section className="card p-4 sm:p-5 mb-6">
+        <SecTitle n="6" title="代价：写回的地址不再严格连续">
+          Z-order 优化的是每个 K 迭代都发生的共享内存读取，代价只在最后一次写回 —— 权衡非常划算。
+        </SecTitle>
+        <WriteBackPanel/>
+      </section>
+
+      <section className="grid lg:grid-cols-3 gap-4">
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="amber">①</Pill><h3 className="font-black tracking-tight">拥堵的本质</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            bank conflict = 多条车道被塞进同一条：同地址是免费广播，同 bank 不同地址才串行。
+            行主序 4×8 下 tileB 的 lane 间距恰好是 8 float = 8 个 bank，跨 4 个 lane 就绕回同一组 bank 的下一层。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="blue">②</Pill><h3 className="font-black tracking-tight">两条消除思路</h3></div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            错开地址（Padding / Swizzle）vs 调整线程映射（4×4 拆分 / Z-order）。
+            前者动数据布局、可能破坏对齐；后者不动一个字节的布局，只改 lane 排布。
+          </p>
+        </div>
+        <div className="card p-5">
+          <div className="flex items-center gap-2"><Pill color="purple">③</Pill><h3 className="font-black tracking-tight">Z-order 为何最优</h3></div>
+          <div className="mono text-xs leading-7 mt-3 text-slate-700">
+            tileA：4 路广播 + 条件 B → 2<br/>
+            tileB：2 路广播 + 条件 A → 2<br/>
+            合计 4（基线 10）
+          </div>
+          <p className="text-sm leading-6 text-slate-600 mt-3">
+            唯一让两个方向同时达到最优的方案；现代 CUTLASS 的 swizzle 思想与此同源。
+          </p>
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950 leading-6">
+        <b>准确性细节：</b>
+        ① 事务粒度与“跨 QW 合并”（条件 A/B 减半）是 CC 7.0+ 的硬件行为，具体事务数会随架构与 BLOCK_K 变化 ——
+        本页数字沿用 bank_conflict.md §8.4–§8.6 的口径（每 warp 每 K 步）。
+        ② 沙盘中 QW0 的 bank 占用表与 note 的 §8.4.3 / §8.5.4 表格逐项一致；Z-order 读 tileB 的起始偏移按 4×4 拆分口径展示。
+        ③ Z-order 的写回是“部分合并”而非完全散乱，见第 6 节。
+      </section>
+
+      <footer className="py-10 text-center text-xs text-slate-400">
+        CUDA GEMM Bank Conflict · Interactive Teaching Diagram ·
+        代码 <span className="mono">matmul_bank.cuh</span> · 笔记 note.md §8 / bank_conflict.md ·
+        系列：<a className="hover:underline" href="./gemm_block_tiling_interactive.html">Block</a> →
+        <a className="hover:underline" href="./gemm_thread_tiling_interactive.html"> Thread</a> →
+        <a className="hover:underline" href="./gemm_warp_tiling_interactive.html"> Warp</a> →
+        <a className="hover:underline" href="./gemm_vectorized_interactive.html"> float4</a> →
+        <a className="hover:underline" href="./gemm_bank_interactive.html"> Z-order</a> →
+        <a className="hover:underline" href="./gemm_double_buffer_interactive.html"> 双缓冲</a> →
+        <a className="hover:underline" href="./gemm_cp_async_interactive.html"> cp.async</a>
+      </footer>
+    </main>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
